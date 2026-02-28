@@ -1,0 +1,1 @@
+/usr/bin/mpicxx  -g -Wall -Wno-deprecated-declarations -Wsign-compare -std=c++11 -Wall -O0 -DTHREAD -D_FILE_OFFSET_BITS=64  -rdynamic CMakeFiles/mpitest.dir/src/test/mpitest.cpp.o  -o mpitest  -Wl,-rpath,/root/zxm/octopus/build -lcrypto -lcryptopp -ldl libnrfsc.so -lcrypto -lcryptopp -ldl -libverbs -lfuse 

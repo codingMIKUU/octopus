@@ -429,6 +429,7 @@ bool FileSystem::addMetaToDirectory(const char *path, const char *name, bool isD
     if (checkLocal(hashNode) == true) { /* If local node. */
         // return true;
         bool result;
+        bool txStarted = false;
         *key = lockWriteHashItem(hashNode, hashAddress); /* Lock hash item. */
         *offset = (uint64_t)hashAddress;
         Debug::debugItem("key = %lx, offset = %lx", *key, *offset);
@@ -446,7 +447,13 @@ bool FileSystem::addMetaToDirectory(const char *path, const char *name, bool isD
                     if (storage->tableDirectoryMeta->get(indexDirectoryMeta, &metaDirectory) == false) { /* Get directory meta. */
                         result = false; /* Fail due to get directory meta error. */
                     } else {
+                        if (metaDirectory.count >= MAX_DIRECTORY_COUNT) {
+                            Debug::notifyError("Directory entry overflow for path %s, max=%d", path, MAX_DIRECTORY_COUNT);
+                            result = false;
+                            goto addMetaToDirectory_local_end;
+                        }
                         LocalTxID = TxLocalBegin();
+                        txStarted = true;
                         metaDirectory.count++; /* Add count of names under directory. */
                         //printf("metaDirectory.count: %d, name len: %d\n", metaDirectory.count, (int)strlen(name));
                         strcpy(metaDirectory.tuple[metaDirectory.count - 1].names, name); /* Add name. */
@@ -466,11 +473,15 @@ bool FileSystem::addMetaToDirectory(const char *path, const char *name, bool isD
                     }
                 }
             }
+addMetaToDirectory_local_end:
+    ;
         }
-        if (result == false) {
-            TxLocalCommit(LocalTxID, false);
-        } else {
-            TxLocalCommit(LocalTxID, true);
+        if (txStarted) {
+            if (result == false) {
+                TxLocalCommit(LocalTxID, false);
+            } else {
+                TxLocalCommit(LocalTxID, true);
+            }
         }
         // unlockWriteHashItem(key, hashNode, hashAddress); /* Unlock hash item. */
         Debug::debugItem("Stage end.");
@@ -754,6 +765,11 @@ bool FileSystem::mknodcd(const char *path)
                         // TxDistributedPrepare(DistributedTxID, false);
                         result = false; /* Fail due to existence of path. */
                     } else {
+						if (parentMeta.count >= MAX_DIRECTORY_COUNT) {
+							Debug::notifyError("Directory entry overflow for parent %s, max=%d", parent, MAX_DIRECTORY_COUNT);
+							result = false;
+							goto mknodcd_local_end;
+						}
                     	
                     	/* Update directory meta first. */
                     	parentMeta.count++; /* Add count of names under directory. */
@@ -784,6 +800,7 @@ bool FileSystem::mknodcd(const char *path)
                         }
                     }
                 }
+mknodcd_local_end:
                 free(parent);
             	free(name);
             }
@@ -1038,6 +1055,11 @@ bool FileSystem::mkdircd(const char *path)
                         // TxDistributedPrepare(DistributedTxID, false);
                         result = false; /* Fail due to existence of path. */
                     } else {
+                        if (parentMeta.count >= MAX_DIRECTORY_COUNT) {
+                            Debug::notifyError("Directory entry overflow for parent %s, max=%d", parent, MAX_DIRECTORY_COUNT);
+                            result = false;
+                            goto mkdircd_local_end;
+                        }
 
                     	/* Update directory meta first. */
                     	parentMeta.count++; /* Add count of names under directory. */
@@ -1067,6 +1089,7 @@ bool FileSystem::mkdircd(const char *path)
                         }
                     }
                 }
+mkdircd_local_end:
                 free(parent);
             	free(name);
             }
@@ -1453,7 +1476,7 @@ void FileSystem::fillFilePositionInformation(uint64_t size, uint64_t offset, fil
             fpi->tuple[i].size = metaFile->tuple[boundStartExtent + i].countExtentBlock * BLOCK_SIZE; /* Assign size. */
         }
         fpi->tuple[fpi->len - 1].node_id= metaFile->tuple[boundEndExtent].hashNode; /* Assign node ID of start extent. */
-        fpi->tuple[fpi->len - 1].offset = 0;  /* Assign offset. */
+        fpi->tuple[fpi->len - 1].offset = metaFile->tuple[boundEndExtent].indexExtentStartBlock * BLOCK_SIZE;  /* Assign offset. */
         fpi->tuple[fpi->len - 1].size = sizeInEndExtent; /* Assign size. */
         Debug::debugItem("Stage 13.");
     }

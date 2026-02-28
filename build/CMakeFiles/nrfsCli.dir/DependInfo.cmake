@@ -1,0 +1,25 @@
+# The set of languages for which implicit dependencies are needed:
+set(CMAKE_DEPENDS_LANGUAGES
+  "CXX"
+  )
+# The set of files for implicit dependencies of each language:
+set(CMAKE_DEPENDS_CHECK_CXX
+  "/root/zxm/octopus/src/test/nrfsCli.cpp" "/root/zxm/octopus/build/CMakeFiles/nrfsCli.dir/src/test/nrfsCli.cpp.o"
+  )
+set(CMAKE_CXX_COMPILER_ID "GNU")
+
+# The include file search paths:
+set(CMAKE_CXX_TARGET_INCLUDE_PATH
+  "/usr/local/ofed/include"
+  "../include"
+  "/usr/java/include"
+  "/usr/java/include/linux"
+  )
+
+# Targets to which this target links.
+set(CMAKE_TARGET_LINKED_INFO_FILES
+  "/root/zxm/octopus/build/CMakeFiles/nrfsc.dir/DependInfo.cmake"
+  )
+
+# Fortran module output directory.
+set(CMAKE_Fortran_TARGET_MODULE_DIR "")

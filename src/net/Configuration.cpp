@@ -27,11 +27,17 @@ Configuration::~Configuration() {
 }
 
 string Configuration::getIPbyID(uint16_t id) {
-	return id2ip[id];
+	auto it = id2ip.find(id);
+	if (it == id2ip.end())
+		return string();
+	return it->second;
 }
 
 uint16_t Configuration::getIDbyIP(string ip) {
-	return ip2id[ip];
+	auto it = ip2id.find(ip);
+	if (it == ip2id.end())
+		return 0;
+	return it->second;
 }
 
 unordered_map<uint16_t, string> Configuration::getInstance() {

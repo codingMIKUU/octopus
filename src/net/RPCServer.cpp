@@ -1,6 +1,7 @@
 #include "RPCServer.hpp"
 // __thread struct  timeval startt, endd;
 RPCServer::RPCServer(int _cqSize) :cqSize(_cqSize) {
+	running.store(true);
 	mm = 0;
 	UnlockWait = false;
 	conf = new Configuration();
@@ -27,14 +28,31 @@ RPCServer::RPCServer(int _cqSize) :cqSize(_cqSize) {
 }
 RPCServer::~RPCServer() {
 	Debug::notifyInfo("Stop RPCServer.");
-	delete conf;
-	for (int i = 0; i < cqSize; i++) {
-		wk[i].detach();
+	running.store(false);
+	if (socket != nullptr) {
+		socket->Stop();
 	}
-	delete mem;
-	delete wk;
-	delete socket;
+	if (wk != nullptr) {
+		for (int i = 0; i < cqSize; i++) {
+			if (wk[i].joinable()) {
+				wk[i].join();
+			}
+		}
+		delete[] wk;
+		wk = nullptr;
+	}
+	delete fs;
+	fs = nullptr;
+	delete client;
+	client = nullptr;
 	delete tx;
+	tx = nullptr;
+	delete socket;
+	socket = nullptr;
+	delete mem;
+	mem = nullptr;
+	delete conf;
+	conf = nullptr;
 	Debug::notifyInfo("RPCServer is closed successfully.");
 }
 
@@ -55,12 +73,12 @@ TxManager* RPCServer::getTxManagerInstance() {
 }
 
 void RPCServer::Worker(int id) {
-	uint32_t tid = gettid();
+	uint32_t tid = octopus_gettid_u32();
 	// gettimeofday(&startt, NULL);
 	Debug::notifyInfo("Worker %d, tid = %d", id, tid);
 	th2id[tid] = id;
 	mem->setID(id);
-	while (true) {
+	while (running.load(std::memory_order_relaxed)) {
 		RequestPoller(id);
 	}
 }
@@ -215,7 +233,7 @@ void RPCServer::ProcessRequest(GeneralSendBuffer *send, uint16_t NodeID, uint16_
 }
 
 int RPCServer::getIDbyTID() {
-	uint32_t tid = gettid();
+	uint32_t tid = octopus_gettid_u32();
 	return th2id[tid];
 }
 uint64_t RPCServer::ContractReceiveBuffer(GeneralSendBuffer *send, GeneralReceiveBuffer *recv) {

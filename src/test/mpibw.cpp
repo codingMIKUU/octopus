@@ -1,8 +1,8 @@
 #ifndef __USE_FILE_OFFSET64
 #define __USE_FILE_OFFSET64
 #endif
-// #define TEST_NRFS_IO
-#define TEST_RAW_IO
+#define TEST_NRFS_IO
+//#define TEST_RAW_IO
 #include "mpi.h"
 #include "nrfs.h"
 #include <stdio.h>
@@ -17,6 +17,27 @@ int numprocs;
 nrfs fs;
 char buf[BUFFER_SIZE];
 int mask = 0;
+static const int BENCH_BUCKETS = 16;
+
+void build_test_path(int seq, char *path)
+{
+	int bucket = seq % BENCH_BUCKETS;
+	sprintf(path, "/bench_%d/file_%d", bucket, seq);
+}
+
+void ensure_bench_directories()
+{
+	if (myid == 0)
+	{
+		char dirpath[255];
+		for (int i = 0; i < BENCH_BUCKETS; i++)
+		{
+			sprintf(dirpath, "/bench_%d", i);
+			nrfsCreateDirectory(fs, dirpath);
+		}
+	}
+	MPI_Barrier(MPI_COMM_WORLD);
+}
 int collect_time(int cost)
 {
 	int i;
@@ -43,7 +64,7 @@ void write_test(int size, int op_time)
 	int *p = (int*)message;
 
 	/* file open */
-	sprintf(path, "/file_%d", file_seq);
+	build_test_path(file_seq, path);
 	nrfsOpenFile(fs, path, O_CREAT);
 	printf("create file: %s\n", path);
 	memset(buf, 'a', BUFFER_SIZE);
@@ -75,7 +96,8 @@ void write_test(int size, int op_time)
 		time_cost = collect_time(*p);
 		num = (double)(size * op_time * numprocs) / time_cost;
 		rate = 1000000 * num / 1024 / 1024;
-		printf("Write Bandwidth = %f MB/s TimeCost = %d\n", rate, (int)time_cost);
+		double ops = ((double)op_time * (double)numprocs) * 1000000.0 / (double)time_cost;
+		printf("Write Bandwidth = %f MB/s TimeCost = %d Ops = %f ops/s\n", rate, (int)time_cost, ops);
 	}
 	nrfsCloseFile(fs, path);
 
@@ -95,7 +117,7 @@ void read_test(int size, int op_time)
 
 	memset(buf, '\0', BUFFER_SIZE);
 	memset(path, '\0', 255);
-	sprintf(path, "/file_%d", file_seq);
+	build_test_path(file_seq, path);
 
 	MPI_Barrier ( MPI_COMM_WORLD );
 	
@@ -124,7 +146,8 @@ void read_test(int size, int op_time)
 		time_cost = collect_time(*p);
 		num = (double)(size * op_time * numprocs) / time_cost;
 		rate = 1000000 * num / 1024 / 1024;
-		printf("Read Bandwidth = %f MB/s TimeCost = %d\n", rate, (int)time_cost);
+		double ops = ((double)op_time * (double)numprocs) * 1000000.0 / (double)time_cost;
+		printf("Read Bandwidth = %f MB/s TimeCost = %d Ops = %f ops/s\n", rate, (int)time_cost, ops);
 	}
 	MPI_Barrier ( MPI_COMM_WORLD );
 
@@ -145,6 +168,7 @@ int main(int argc, char **argv)
 	}
 	int block_size = atoi(argv[1]);
 	int op_time = atoi(argv[2]);
+	printf("block size = %d KB, operation times = %d\n", block_size, op_time);
 	MPI_Init( &argc, &argv);
 	MPI_Comm_rank( MPI_COMM_WORLD, &myid );
 	MPI_Comm_size( MPI_COMM_WORLD, &numprocs );
@@ -153,14 +177,16 @@ int main(int argc, char **argv)
 
 	/* nrfs connection */
 	fs = nrfsConnect("default", 0, 0);
+	ensure_bench_directories();
 
+	
 	MPI_Barrier ( MPI_COMM_WORLD );
 
 	write_test(1024 * block_size, op_time);
 	read_test(1024 * block_size, op_time);
 
 	MPI_Barrier ( MPI_COMM_WORLD );
-	sprintf(path, "/file_%d", myid);
+	build_test_path(myid, path);
 	nrfsDelete(fs, path);
 	nrfsDisconnect(fs);
 

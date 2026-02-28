@@ -12,8 +12,12 @@
 
 using namespace std;
 
-static inline uint32_t gettid() {
+static inline uint32_t octopus_gettid_u32() {
+#ifdef SYS_gettid
     return (uint32_t)syscall(SYS_gettid);
+#else
+    return (uint32_t)getpid();
+#endif
 }
 
 #define CLIENT_MESSAGE_SIZE 4096
@@ -67,6 +71,7 @@ typedef struct : ExtraInformation {     /* General send buffer structure. */
     char path[MAX_PATH_LENGTH];         /* Path. */
 } GeneralSendBuffer;
 typedef struct : ExtraInformation {
+    
 	Message message;
 	uint64_t startBlock;
 	uint64_t countBlock;
@@ -204,11 +209,14 @@ public:
         return item;
     }
     T PopPolling() {
-        while (offset == 0);
+        std::unique_lock<std::mutex> mlock(m);
+        while (offset == 0) {
+            cond.wait(mlock);
+        }
         auto item = queue.front();
         queue.erase(queue.begin());
-         __sync_fetch_and_sub(&offset, 1);
-         return item;
+        __sync_fetch_and_sub(&offset, 1);
+        return item;
     }
     void push(T item) {
         std::unique_lock<std::mutex> mlock(m);
@@ -217,8 +225,11 @@ public:
         cond.notify_one();
     }
     void PushPolling(T item) {
+        std::unique_lock<std::mutex> mlock(m);
         queue.push_back(item);
         __sync_fetch_and_add(&offset, 1);
+        mlock.unlock();
+        cond.notify_one();
     }
 };
 

@@ -3,7 +3,7 @@ project(dmfs)
 
 # Compiler options
 set (CMAKE_C_FLAGS "-Wall -Wno-deprecated-declarations -Wsign-compare")
-set (CMAKE_CXX_FLAGS "-g ${CMAKE_C_FLAGS} -std=c++11 -Wall -O0 -DTHREAD -D_FILE_OFFSET_BITS=64 -libverbs -lfuse")
+set (CMAKE_CXX_FLAGS "-g ${CMAKE_C_FLAGS} -std=c++11 -Wall -O0 -DTHREAD -D_FILE_OFFSET_BITS=64")
 
 option (SANITIZE "Turn on sanitization" OFF)
 if (SANITIZE)
@@ -17,6 +17,16 @@ include_directories(${CRYPTO_INCLUDE_DIR})
 #message("-------: ${CRYPTO_INCLUDE_DIR}")
 set(THREADS_PREFER_PTHREAD_FLAG ON)
 find_package(Threads REQUIRED)
+
+find_library(IBVERBS_LIB ibverbs)
+if (NOT IBVERBS_LIB)
+    message(FATAL_ERROR "libibverbs not found (try installing libibverbs-dev)")
+endif()
+
+find_library(FUSE_LIB fuse)
+if (NOT FUSE_LIB)
+    message(FATAL_ERROR "libfuse not found (try installing libfuse-dev)")
+endif()
 
 # Incs and Libs
 set(INCLUDE_BASE ${PROJECT_SOURCE_DIR}/include)
@@ -32,20 +42,21 @@ set(TOOLS_SRC ${PROJECT_SOURCE_DIR}/src/tools)
 # Build server
 file(GLOB_RECURSE SERVER_SRC ${FS_SRC}/*.cpp ${FS_SRC}/*.c ${NET_SRC}/*.cpp ${TOOLS_SRC}/*.cpp)
 add_executable(dmfs ${SERVER_SRC})
-target_link_libraries(dmfs Threads::Threads)
+target_link_libraries(dmfs Threads::Threads ${IBVERBS_LIB} ${FUSE_LIB})
 
 # Build client library
 find_package(JNI)
 include_directories(${JNI_INCLUDE_DIRS})
 #link_libraries(${JNI_LIBRARIES})
 message("===== ${JNI_INCLUDE_DIRS} =====lib:${JNI_LIBRARIES}")
-set (CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -L/usr/local/lib/libfuse.so")
 set(CLIENT_BASE ${PROJECT_SOURCE_DIR}/client)
 set(CNET_SRC ${PROJECT_SOURCE_DIR}/src/net)
 set(CLIB_SRC ${PROJECT_SOURCE_DIR}/src/client)
 file(GLOB_RECURSE NRFS_LIB_SRC ${CNET_SRC}/*.cpp ${CLIB_SRC}/*.cpp ${TOOLS_SRC}/*.cpp ${FS_SRC}/*.cpp)
 add_library(nrfsc SHARED ${NRFS_LIB_SRC})
 add_library(jninrfs SHARED ${NRFS_LIB_SRC} ${CLIB_SRC}/JavaApiImpl.cpp)
+target_link_libraries(nrfsc ${IBVERBS_LIB} ${FUSE_LIB})
+target_link_libraries(jninrfs ${IBVERBS_LIB} ${FUSE_LIB})
 # Build client test
 find_package(MPI REQUIRED)
 set (CMAKE_C_COMPILER ${MPI_C_COMPILER})

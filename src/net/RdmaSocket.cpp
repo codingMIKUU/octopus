@@ -5,12 +5,86 @@
 *
 ***********************************************************************/
 #include "RdmaSocket.hpp"
+#include <ifaddrs.h>
+#include <stdio.h>
+#include <mutex>
+#include <unordered_set>
+
+static bool octopus_get_local_ipv4_addrs(std::vector<std::string> &out) {
+    struct ifaddrs *ifaddr = nullptr;
+    if (getifaddrs(&ifaddr) != 0) {
+        return false;
+    }
+    for (struct ifaddrs *ifa = ifaddr; ifa != nullptr; ifa = ifa->ifa_next) {
+        if (ifa->ifa_addr == nullptr)
+            continue;
+        if (ifa->ifa_addr->sa_family != AF_INET)
+            continue;
+        char buf[INET_ADDRSTRLEN];
+        void *addr = &((struct sockaddr_in *)ifa->ifa_addr)->sin_addr;
+        if (inet_ntop(AF_INET, addr, buf, sizeof(buf)) != nullptr) {
+            out.emplace_back(buf);
+        }
+    }
+    freeifaddrs(ifaddr);
+    return true;
+}
+
+static uint16_t octopus_pick_node_id_from_conf(Configuration *conf) {
+    if (conf == nullptr)
+        return 0;
+    auto confMap = conf->getInstance();
+    std::vector<std::string> localIps;
+    if (!octopus_get_local_ipv4_addrs(localIps)) {
+        return 0;
+    }
+    for (const auto &localIp : localIps) {
+        for (const auto &kv : confMap) {
+            if (kv.second == localIp) {
+                return kv.first;
+            }
+        }
+    }
+    return 0;
+}
+
+static inline uint64_t rdtsc() {
+    unsigned int lo, hi;
+    __asm__ __volatile__("rdtsc" : "=a"(lo), "=d"(hi));
+    return ((uint64_t)hi << 32) | lo;
+}
+
+static inline void octopus_log_wqe(uint16_t local_id, uint16_t remote_id, uint64_t size) {
+    char path[96];
+    snprintf(path, sizeof(path), "/root/zxm/log_data/rdma_peer_%u_to_%u.log",
+             (unsigned int)local_id, (unsigned int)remote_id);
+    const char *mode = "a";
+    static std::mutex opened_mutex;
+    static std::unordered_set<uint16_t> opened;
+    {
+        std::lock_guard<std::mutex> lock(opened_mutex);
+        if (opened.insert(local_id).second) {
+            mode = "w";
+        }
+    }
+    FILE *fp = fopen(path, mode);
+    if (fp == NULL) {
+        return;
+    }
+    unsigned long long cycles = (unsigned long long)rdtsc();
+    fprintf(fp, "%llu %llu\n", (unsigned long long)size, cycles);
+    fclose(fp);
+}
+
 using namespace std;
 
 RdmaSocket::RdmaSocket(int _cqNum, uint64_t _mm, uint64_t _mmSize, Configuration* _conf, bool _isServer, uint8_t _Mode) :
 DeviceName(NULL), Port(1), ServerPort(5678), GidIndex(0), 
 isRunning(true), isServer(_isServer), cqNum(_cqNum), cqPtr(0), 
-mm(_mm), mmSize(_mmSize), conf(_conf), MaxNodeID(1), Mode(_Mode) {
+mm(_mm), mmSize(_mmSize), conf(_conf), MaxNodeID(1), listenSock(-1), Mode(_Mode) {
+    for (int i = 0; i < 1000; i++) {
+        peers[i] = NULL;
+    }
 	/* Use multiple cq to parallelly process new request. */
 	cq = (struct ibv_cq **)malloc(cqNum * sizeof(struct ibv_cq *));
     for (int i = 0; i < cqNum; i++)
@@ -20,13 +94,20 @@ mm(_mm), mmSize(_mmSize), conf(_conf), MaxNodeID(1), Mode(_Mode) {
     ServerCount = conf->getServerCount();
     MaxNodeID = ServerCount + 1;
 	if (isServer) {
-		char hname[128];
-		struct hostent *hent;
-		gethostname(hname, sizeof(hname));
-		hent = gethostbyname(hname);
-		string ip(inet_ntoa(*(struct in_addr*)(hent->h_addr_list[0])));
-		MyNodeID = conf->getIDbyIP(ip);
-        Debug::notifyInfo("IP = %s, NodeID = %d", ip.c_str(), MyNodeID);
+        MyNodeID = octopus_pick_node_id_from_conf(conf);
+        if (MyNodeID == 0) {
+            char hname[128];
+            struct hostent *hent;
+            gethostname(hname, sizeof(hname));
+            hent = gethostbyname(hname);
+            string ip(inet_ntoa(*(struct in_addr*)(hent->h_addr_list[0])));
+            MyNodeID = conf->getIDbyIP(ip);
+            Debug::notifyInfo("IP = %s, NodeID = %d", ip.c_str(), MyNodeID);
+        }
+        if (MyNodeID == 0) {
+            Debug::notifyError("Failed to map local IP to a NodeID from conf.xml. Please ensure conf.xml contains a local interface IP.");
+            MyNodeID = 1;
+        }
 	} else {
         cqPtr = 0;
     }
@@ -47,9 +128,17 @@ mm(_mm), mmSize(_mmSize), conf(_conf), MaxNodeID(1), Mode(_Mode) {
 
 RdmaSocket::~RdmaSocket() {
     Debug::notifyInfo("Stop RdmaSocket.");
+	isRunning = false;
     if (isServer) {
         Debug::debugItem("1");
-        Listener.detach();
+		if (listenSock != -1) {
+			shutdown(listenSock, SHUT_RDWR);
+			close(listenSock);
+			listenSock = -1;
+		}
+		if (Listener.joinable()) {
+			Listener.join();
+		}
     } else {
         for (int i = 0; i < WORKER_NUMBER; i++) {
             worker[i].detach();
@@ -58,6 +147,20 @@ RdmaSocket::~RdmaSocket() {
     Debug::debugItem("2");
 	ResourcesDestroy();
     Debug::notifyInfo("RdmaSocket is closed successfully.");
+}
+
+void RdmaSocket::Stop() {
+    isRunning = false;
+    if (isServer) {
+        if (listenSock != -1) {
+            shutdown(listenSock, SHUT_RDWR);
+            close(listenSock);
+            listenSock = -1;
+        }
+        if (Listener.joinable()) {
+            Listener.join();
+        }
+    }
 }
 
 void RdmaSocket::NotifyPerformance() {
@@ -246,11 +349,11 @@ bool RdmaSocket::CreateQueuePair(PeerSockData *peer, int offset) {
     attr.cap.max_recv_sge = 1;
     attr.cap.max_inline_data = 0;
     peer->qp[offset] = ibv_create_qp(pd, &attr);
-    Debug::notifyInfo("Create Queue Pair with Num = %d", peer->qp[offset]->qp_num);
     if (!peer->qp[offset]) {
     	Debug::notifyError("Failed to create QP");
     	return false;
     }
+    Debug::notifyInfo("Create Queue Pair with Num = %d", peer->qp[offset]->qp_num);
     return true;
 }
 
@@ -285,25 +388,24 @@ bool RdmaSocket::ModifyQPtoRTR(struct ibv_qp *qp, uint32_t remote_qpn, uint16_t 
     int rc;
     memset(&attr, 0, sizeof(attr));
     attr.qp_state = IBV_QPS_RTR;
-    attr.path_mtu = IBV_MTU_4096;
+    attr.path_mtu = PortAttribute.active_mtu ? PortAttribute.active_mtu : IBV_MTU_1024;
     attr.dest_qp_num = remote_qpn;
     attr.rq_psn = 3185;
     // attr.max_dest_rd_atomic = 1;
     // attr.min_rnr_timer = 0x12;
-    attr.ah_attr.is_global = 0;
-    attr.ah_attr.dlid = dlid;
+    const bool use_grh = (PortAttribute.lid == 0) || (dlid == 0);
+    attr.ah_attr.is_global = use_grh ? 1 : 0;
+    attr.ah_attr.dlid = use_grh ? 0 : dlid;
     attr.ah_attr.sl = 0;
     attr.ah_attr.src_path_bits = 0;
     attr.ah_attr.port_num = Port;
-    // if (GidIndex >= 0) {
-    //     attr.ah_attr.is_global = 1;
-    //     attr.ah_attr.port_num = 1;
-    //     memcpy(&attr.ah_attr.grh.dgid, dgid, 16);
-    //     attr.ah_attr.grh.flow_label = 0;
-    //     attr.ah_attr.grh.hop_limit = 1;
-    //     attr.ah_attr.grh.sgid_index = GidIndex;
-    //     attr.ah_attr.grh.traffic_class = 0;
-    // }
+    if (use_grh) {
+        memcpy(&attr.ah_attr.grh.dgid, dgid, 16);
+        attr.ah_attr.grh.flow_label = 0;
+        attr.ah_attr.grh.hop_limit = 1;
+        attr.ah_attr.grh.sgid_index = GidIndex;
+        attr.ah_attr.grh.traffic_class = 0;
+    }
     flags = IBV_QP_STATE | IBV_QP_AV | IBV_QP_PATH_MTU | IBV_QP_DEST_QPN | IBV_QP_RQ_PSN;
     // IBV_QP_MAX_DEST_RD_ATOMIC | IBV_QP_MIN_RNR_TIMER
     if (Mode == 0) {
@@ -383,13 +485,23 @@ bool RdmaSocket::ConnectQueuePair(PeerSockData *peer) {
         MyNodeID = RemoteID.GivenID;
     }
 
-	CreateQueuePair(peer, 0);
-    CreateQueuePair(peer, 1);
+	if (!CreateQueuePair(peer, 0)) {
+        rc = 1;
+        goto ConnectQPExit;
+    }
+    if (!CreateQueuePair(peer, 1)) {
+        rc = 1;
+        goto ConnectQPExit;
+    }
     if (!isServer || (isServer && peer->NodeID > conf->getServerCount())) {
         /* Connection between server and client, create data channel. */
         DoubleQP = true;
-        for (int i = 2; i < QP_NUMBER; i++)
-        CreateQueuePair(peer, i);
+        for (int i = 2; i < QP_NUMBER; i++) {
+            if (!CreateQueuePair(peer, i)) {
+                rc = 1;
+                goto ConnectQPExit;
+            }
+        }
     }
 	if (GidIndex >= 0) {
 		rc = ibv_query_gid(ctx, Port, GidIndex, &MyGid);
@@ -463,16 +575,16 @@ int RdmaSocket::DataSyncwithSocket(int sock, int size, char *LocalData, char *Re
     int totalReadBytes = 0;
     rc = write(sock, LocalData, size);
     if (rc < size) {
-    	Debug::notifyError("Failed writing data during sock_sync_data");
+	    Debug::notifyError("Failed writing data during sock_sync_data");
     } else {
-    	rc = 0;
+	    rc = 0;
     }
     while (!rc && totalReadBytes < size) {
         readBytes = read(sock, RemoteData, size);
         if (readBytes > 0) {
-        	totalReadBytes += readBytes;
+	        totalReadBytes += readBytes;
         } else {
-        	rc = readBytes;
+	        rc = readBytes;
         }
     }
     return rc;
@@ -538,6 +650,7 @@ void RdmaSocket::RdmaListen() {
 	struct sockaddr_in MyAddress;
 	int sock;
 	int on = 1;
+    const int backlog = 1024;
 	/* Socket Initialization */
 	memset(&MyAddress,0,sizeof(MyAddress));
 	MyAddress.sin_family=AF_INET;
@@ -556,7 +669,8 @@ void RdmaSocket::RdmaListen() {
 		Debug::debugItem("Bind failed with errnum ", errno);
 	}
 
-	listen(sock,5);
+	listen(sock, backlog);
+	listenSock = sock;
 	
     Listener = thread(&RdmaSocket::RdmaAccept, this, sock);
     /* Connect to other servers. */
@@ -577,7 +691,15 @@ void RdmaSocket::RdmaAccept(int sock) {
         peer->counter = 0;
         if (ConnectQueuePair(peer) == false) {
             Debug::notifyError("RDMA connect with error");
+            close(fd);
+            free(peer);
         } else {
+            if (peer->NodeID >= 1000) {
+                Debug::notifyError("Client NodeID %d exceeds peer table limit", peer->NodeID);
+                close(fd);
+                free(peer);
+                continue;
+            }
             peers[peer->NodeID] = peer;
             Debug::notifyInfo("Client %d Joined Us", peer->NodeID);
             /* Rdma Receive in Advance. */
@@ -621,7 +743,7 @@ void RdmaSocket::ServerConnect() {
 int RdmaSocket::SocketConnect(uint16_t NodeID) {
 	struct sockaddr_in RemoteAddress;
 	int sock;
-	struct timeval timeout = {3, 0};
+    struct timeval timeout = {30, 0};
 	memset(&RemoteAddress, 0, sizeof(RemoteAddress));
 	RemoteAddress.sin_family = AF_INET;
 	inet_aton(conf->getIPbyID(NodeID).c_str(), (struct in_addr*)&RemoteAddress.sin_addr);
@@ -695,7 +817,15 @@ void RdmaSocket::RdmaConnect() {
 * Assume that data has already been copied.
 */
 bool RdmaSocket::RdmaSend(uint16_t NodeID, uint64_t SourceBuffer, uint64_t BufferSize) {
-    //assert(peers[NodeID]);
+    if (NodeID >= 1000) {
+        Debug::notifyError("RdmaSend: invalid NodeID %d", NodeID);
+        return false;
+    }
+    PeerSockData *peer = peers[NodeID];
+    if (peer == NULL) {
+        Debug::notifyError("RdmaSend: no RDMA peer for NodeID %d", NodeID);
+        return false;
+    }
     struct ibv_sge sg;
     struct ibv_send_wr wr;
     struct ibv_send_wr *wrBad;
@@ -713,7 +843,7 @@ bool RdmaSocket::RdmaSend(uint16_t NodeID, uint64_t SourceBuffer, uint64_t Buffe
     wr.opcode     = IBV_WR_SEND_WITH_IMM;
     wr.send_flags = IBV_SEND_SIGNALED;
 
-    if (ibv_post_send(peers[NodeID]->qp[0], &wr, &wrBad)) {
+    if (ibv_post_send(peer->qp[0], &wr, &wrBad)) {
         Debug::notifyError("Send with RDMA_SEND failed.");
         return false;
     }
@@ -721,8 +851,15 @@ bool RdmaSocket::RdmaSend(uint16_t NodeID, uint64_t SourceBuffer, uint64_t Buffe
 }
 
 bool RdmaSocket::_RdmaBatchSend(uint16_t NodeID, uint64_t SourceBuffer, uint64_t BufferSize, int BatchSize) {
-    assert(peers[NodeID]);
+    if (NodeID >= 1000) {
+        Debug::notifyError("_RdmaBatchSend: invalid NodeID %d", NodeID);
+        return false;
+    }
     PeerSockData *peer = peers[NodeID];
+    if (peer == NULL) {
+        Debug::notifyError("_RdmaBatchSend: no RDMA peer for NodeID %d", NodeID);
+        return false;
+    }
     struct ibv_sge sgl[MAX_POST_LIST];
     struct ibv_send_wr send_wr[MAX_POST_LIST];
     struct ibv_send_wr *wrBad;
@@ -753,7 +890,15 @@ bool RdmaSocket::_RdmaBatchSend(uint16_t NodeID, uint64_t SourceBuffer, uint64_t
 }
 
 bool RdmaSocket::RdmaReceive(uint16_t NodeID, uint64_t SourceBuffer, uint64_t BufferSize) {
-    //assert(peers[NodeID]);
+    if (NodeID >= 1000) {
+        Debug::notifyError("RdmaReceive: invalid NodeID %d", NodeID);
+        return false;
+    }
+    PeerSockData *peer = peers[NodeID];
+    if (peer == NULL) {
+        Debug::notifyError("RdmaReceive: no RDMA peer for NodeID %d", NodeID);
+        return false;
+    }
     struct ibv_sge sg;
     struct ibv_recv_wr wr;
     struct ibv_recv_wr *wrBad;
@@ -767,7 +912,7 @@ bool RdmaSocket::RdmaReceive(uint16_t NodeID, uint64_t SourceBuffer, uint64_t Bu
     wr.wr_id      = 0;
     wr.sg_list    = &sg;
     wr.num_sge    = 1;
-    ret = ibv_post_recv(peers[NodeID]->qp[0], &wr, &wrBad);
+    ret = ibv_post_recv(peer->qp[0], &wr, &wrBad);
     if (ret) {
         Debug::notifyError("Receive with RDMA_RECV failed, ret = %d.", ret);
         return false;
@@ -776,6 +921,15 @@ bool RdmaSocket::RdmaReceive(uint16_t NodeID, uint64_t SourceBuffer, uint64_t Bu
 }
 
 bool RdmaSocket::_RdmaBatchReceive(uint16_t NodeID, uint64_t SourceBuffer, uint64_t BufferSize, int BatchSize) {
+    if (NodeID >= 1000) {
+        Debug::notifyError("_RdmaBatchReceive: invalid NodeID %d", NodeID);
+        return false;
+    }
+    PeerSockData *peer = peers[NodeID];
+    if (peer == NULL) {
+        Debug::notifyError("_RdmaBatchReceive: no RDMA peer for NodeID %d", NodeID);
+        return false;
+    }
     struct ibv_recv_wr recv_wr[MAX_POST_LIST], *bad_recv_wr;
     struct ibv_sge sgl[MAX_POST_LIST];
     int w_i;
@@ -788,7 +942,7 @@ bool RdmaSocket::_RdmaBatchReceive(uint16_t NodeID, uint64_t SourceBuffer, uint6
         recv_wr[w_i].num_sge = 1;
         recv_wr[w_i].next = (w_i == BatchSize - 1) ? NULL : &recv_wr[w_i + 1];
     }
-    ret = ibv_post_recv(peers[NodeID]->qp[0], &recv_wr[0], &bad_recv_wr);
+    ret = ibv_post_recv(peer->qp[0], &recv_wr[0], &bad_recv_wr);
     if (ret) {
 	Debug::notifyError("Receive with RDMA_RECV failed, ret = %d.", ret);
 	return false;
@@ -797,7 +951,15 @@ bool RdmaSocket::_RdmaBatchReceive(uint16_t NodeID, uint64_t SourceBuffer, uint6
 }
 
 bool RdmaSocket::RdmaRead(uint16_t NodeID, uint64_t SourceBuffer, uint64_t DesBuffer, uint64_t BufferSize, int TaskID) {
-    //assert(peers[NodeID]);
+    if (NodeID >= 1000) {
+        Debug::notifyError("RdmaRead: invalid NodeID %d", NodeID);
+        return false;
+    }
+    PeerSockData *peer = peers[NodeID];
+    if (peer == NULL) {
+        Debug::notifyError("RdmaRead: no RDMA peer for NodeID %d", NodeID);
+        return false;
+    }
     struct ibv_sge sg;
     struct ibv_send_wr wr;
     struct ibv_send_wr *wrBad;
@@ -813,10 +975,10 @@ bool RdmaSocket::RdmaRead(uint16_t NodeID, uint64_t SourceBuffer, uint64_t DesBu
     wr.num_sge    = 1;
     wr.opcode     = IBV_WR_RDMA_READ;
     wr.send_flags = IBV_SEND_SIGNALED;
-    wr.wr.rdma.remote_addr = DesBuffer + peers[NodeID]->RegisteredMemory;
-    wr.wr.rdma.rkey        = peers[NodeID]->rkey;
+    wr.wr.rdma.remote_addr = DesBuffer + peer->RegisteredMemory;
+    wr.wr.rdma.rkey        = peer->rkey;
      
-    if (ibv_post_send(peers[NodeID]->qp[TaskID], &wr, &wrBad)) {
+    if (ibv_post_send(peer->qp[TaskID], &wr, &wrBad)) {
         Debug::notifyError("Send with RDMA_READ failed.");
         return false;
     }
@@ -824,11 +986,18 @@ bool RdmaSocket::RdmaRead(uint16_t NodeID, uint64_t SourceBuffer, uint64_t DesBu
 }
 
 bool RdmaSocket::_RdmaBatchRead(uint16_t NodeID, uint64_t SourceBuffer, uint64_t DesBuffer, uint64_t BufferSize, int BatchSize) {
-    //assert(peers[NodeID]);
+    if (NodeID >= 1000) {
+        Debug::notifyError("_RdmaBatchRead: invalid NodeID %d", NodeID);
+        return false;
+    }
+    PeerSockData *peer = peers[NodeID];
+    if (peer == NULL) {
+        Debug::notifyError("_RdmaBatchRead: no RDMA peer for NodeID %d", NodeID);
+        return false;
+    }
     struct ibv_sge sgl[MAX_POST_LIST];
     struct ibv_send_wr send_wr[MAX_POST_LIST];
     struct ibv_send_wr *wrBad;
-    PeerSockData *peer = peers[NodeID];
     struct ibv_wc wc;
     int w_i;
     for (w_i = 0; w_i < BatchSize; w_i++) {
@@ -858,7 +1027,6 @@ bool RdmaSocket::_RdmaBatchRead(uint16_t NodeID, uint64_t SourceBuffer, uint64_t
 
 bool RdmaSocket::RemoteRead(uint64_t bufferSend, uint16_t NodeID, uint64_t bufferReceive, uint64_t size) {
     int shipSize;
-    TransferTask tasks[4];
     if (size < 4 * 1024 * 1024) {
         /* Small size read, no need to use multithread to transfer. */
         InboundHamal(0, bufferSend, NodeID, bufferReceive, size);
@@ -869,12 +1037,13 @@ bool RdmaSocket::RemoteRead(uint64_t bufferSend, uint16_t NodeID, uint64_t buffe
         shipSize = size / WORKER_NUMBER;
         shipSize = shipSize >> 12 << 12;
         for (int i = 0; i < WORKER_NUMBER; i++) {
-            tasks[i].OpType = false;
-            tasks[i].size = (i < 3) ? shipSize : (size - 3 * shipSize);
-            tasks[i].bufferReceive = bufferReceive + i * shipSize;
-            tasks[i].NodeID = NodeID;
-            tasks[i].bufferSend = bufferSend + i * shipSize;
-            queue[i].PushPolling(&tasks[i]);
+            TransferTask *task = new TransferTask();
+            task->OpType = false;
+            task->size = (i < 3) ? shipSize : (size - 3 * shipSize);
+            task->bufferReceive = bufferReceive + i * shipSize;
+            task->NodeID = NodeID;
+            task->bufferSend = bufferSend + i * shipSize;
+            queue[i].PushPolling(task);
         }
         while (TransferSignal != WORKER_NUMBER);
         return true;
@@ -891,6 +1060,7 @@ bool RdmaSocket::DataTransferWorker(int id) {
         } else {
             InboundHamal(id, task->bufferSend, task->NodeID, task->bufferReceive, task->size);
         }
+        delete task;
     }
 }
 
@@ -910,8 +1080,14 @@ bool RdmaSocket::InboundHamal(int TaskID, uint64_t bufferSend, uint16_t NodeID, 
         //                SendSize, 
         //                1);
         gettimeofday(&start, NULL);
-        RdmaRead(NodeID, SendPoolAddr, bufferReceive + TotalSizeSend, SendSize, TaskID + 1);
-        PollCompletion(NodeID, 1, &wc);
+        if (!RdmaRead(NodeID, SendPoolAddr, bufferReceive + TotalSizeSend, SendSize, TaskID + 1)) {
+            Debug::notifyError("InboundHamal: RdmaRead failed (NodeID=%d, TaskID=%d, size=%lu)", NodeID, TaskID, SendSize);
+            return false;
+        }
+        if (PollCompletion(NodeID, 1, &wc) < 0) {
+            Debug::notifyError("InboundHamal: PollCompletion failed (NodeID=%d, TaskID=%d)", NodeID, TaskID);
+            return false;
+        }
         memcpy((void *)(bufferSend + TotalSizeSend), (void *)SendPoolAddr, SendSize);
         gettimeofday(&end, NULL);
         diff = 1000000 * (end.tv_sec - start.tv_sec) + end.tv_usec - start.tv_usec;
@@ -924,11 +1100,18 @@ bool RdmaSocket::InboundHamal(int TaskID, uint64_t bufferSend, uint16_t NodeID, 
 }
 
 bool RdmaSocket::RdmaWrite(uint16_t NodeID, uint64_t SourceBuffer, uint64_t DesBuffer, uint64_t BufferSize, uint32_t imm, int TaskID) {
-    //assert(peers[NodeID]);
+    if (NodeID >= 1000) {
+        Debug::notifyError("RdmaWrite: invalid NodeID %d", NodeID);
+        return false;
+    }
     struct ibv_sge sg;
     struct ibv_send_wr wr;
     struct ibv_send_wr *wrBad;
     PeerSockData *peer = peers[NodeID];
+    if (peer == NULL) {
+        Debug::notifyError("RdmaWrite: no RDMA peer for NodeID %d", NodeID);
+        return false;
+    }
     memset(&sg, 0, sizeof(sg));
     sg.addr   = (uintptr_t)SourceBuffer;
     sg.length = BufferSize;
@@ -958,7 +1141,6 @@ bool RdmaSocket::RdmaWrite(uint16_t NodeID, uint64_t SourceBuffer, uint64_t DesB
 
 bool RdmaSocket::RemoteWrite(uint64_t bufferSend, uint16_t NodeID, uint64_t bufferReceive, uint64_t size) {
     int shipSize;
-    TransferTask tasks[4];
     if (size < 4 * 1024 * 1024) {
         /* Small size write, no need to use multithread to transfer. */
         OutboundHamal(0, bufferSend, NodeID, bufferReceive, size);
@@ -969,12 +1151,13 @@ bool RdmaSocket::RemoteWrite(uint64_t bufferSend, uint16_t NodeID, uint64_t buff
         shipSize = size / WORKER_NUMBER;
         shipSize = shipSize >> 12 << 12;
         for (int i = 0; i < WORKER_NUMBER; i++) {
-            tasks[i].OpType = true;
-            tasks[i].size = (i < 3) ? shipSize : (size - 3 * shipSize);
-            tasks[i].bufferReceive = bufferReceive + i * shipSize;
-            tasks[i].NodeID = NodeID;
-            tasks[i].bufferSend = bufferSend + i * shipSize;
-            queue[i].PushPolling(&tasks[i]);
+            TransferTask *task = new TransferTask();
+            task->OpType = true;
+            task->size = (i < 3) ? shipSize : (size - 3 * shipSize);
+            task->bufferReceive = bufferReceive + i * shipSize;
+            task->NodeID = NodeID;
+            task->bufferSend = bufferSend + i * shipSize;
+            queue[i].PushPolling(task);
         }
         while (TransferSignal != WORKER_NUMBER);
         return true;
@@ -991,6 +1174,8 @@ bool RdmaSocket::OutboundHamal(int TaskID, uint64_t bufferSend, uint16_t NodeID,
     uint64_t diff;
     while (TotalSizeSend < size) {
         SendSize = (size - TotalSizeSend) >= SendPoolSize ? SendPoolSize : (size - TotalSizeSend);
+        // if(!isServer)
+        //     octopus_log_wqe(MyNodeID, NodeID, SendSize);
         gettimeofday(&start,NULL);
         memcpy((void *)SendPoolAddr, (void *)(bufferSend + TotalSizeSend), SendSize);
         // _RdmaBatchWrite(NodeID, 
@@ -999,8 +1184,14 @@ bool RdmaSocket::OutboundHamal(int TaskID, uint64_t bufferSend, uint16_t NodeID,
         //                SendSize, 
         //                (uint32_t)-1,
         //                1);
-        RdmaWrite(NodeID, SendPoolAddr, bufferReceive + TotalSizeSend, SendSize, -1, TaskID + 1);
-        PollCompletion(NodeID, 1, &wc);
+        if (!RdmaWrite(NodeID, SendPoolAddr, bufferReceive + TotalSizeSend, SendSize, (uint32_t)-1, TaskID + 1)) {
+            Debug::notifyError("OutboundHamal: RdmaWrite failed (NodeID=%d, TaskID=%d, size=%lu)", NodeID, TaskID, SendSize);
+            return false;
+        }
+        if (PollCompletion(NodeID, 1, &wc) < 0) {
+            Debug::notifyError("OutboundHamal: PollCompletion failed (NodeID=%d, TaskID=%d)", NodeID, TaskID);
+            return false;
+        }
         // if (SendSize > 32 * 1024) {
         //     /* Wait Until write finish, May help. */
         //     RdmaRead(NodeID, SendPoolAddr, bufferReceive + TotalSizeSend, 1);
@@ -1014,8 +1205,14 @@ bool RdmaSocket::OutboundHamal(int TaskID, uint64_t bufferSend, uint16_t NodeID,
         if (WriteTest) {
             gettimeofday(&start,NULL);
             for (int i = 0; i < 10; i ++) {
-                RdmaWrite(NodeID, SendPoolAddr, bufferReceive, 1024 * 1024, -1, TaskID + 1);
-                PollCompletion(NodeID, 1, &wc);
+                if (!RdmaWrite(NodeID, SendPoolAddr, bufferReceive, 1024 * 1024, (uint32_t)-1, TaskID + 1)) {
+                    Debug::notifyError("OutboundHamal: RdmaWrite failed during WriteTest");
+                    return false;
+                }
+                if (PollCompletion(NodeID, 1, &wc) < 0) {
+                    Debug::notifyError("OutboundHamal: PollCompletion failed during WriteTest");
+                    return false;
+                }
             }
             gettimeofday(&end,NULL);
             diff = 1000000 * (end.tv_sec - start.tv_sec) + end.tv_usec - start.tv_usec;
@@ -1030,15 +1227,24 @@ bool RdmaSocket::OutboundHamal(int TaskID, uint64_t bufferSend, uint16_t NodeID,
 }
 
 bool RdmaSocket::_RdmaBatchWrite(uint16_t NodeID, uint64_t SourceBuffer, uint64_t DesBuffer, uint64_t BufferSize, uint32_t imm, int BatchSize) {
-    //assert(peers[NodeID]);
     struct ibv_sge sgl[MAX_POST_LIST];
     struct ibv_send_wr send_wr[MAX_POST_LIST];
     struct ibv_send_wr *wrBad;
+    if (NodeID >= 1000) {
+        Debug::notifyError("_RdmaBatchWrite: invalid NodeID %d", NodeID);
+        return false;
+    }
     PeerSockData *peer = peers[NodeID];
+    if (peer == NULL) {
+        Debug::notifyError("_RdmaBatchWrite: no RDMA peer for NodeID %d", NodeID);
+        return false;
+    }
     struct ibv_wc wc;
     int w_i;
     //printf("NodeID = %d, qp_num = %lx, cq = %lx, rkey = %x\n", NodeID, peer->qp->qp_num, peer->cq, peer->rkey);
     for (w_i = 0; w_i < BatchSize; w_i++) {
+        // if(!isServer)
+        //     octopus_log_wqe(MyNodeID, NodeID, BufferSize);
         if ((peer->counter & SIGNAL_BATCH) == 0 && peer->counter > 0 && !isServer) {
             PollCompletion(NodeID, 1, &wc);
         }
@@ -1075,6 +1281,10 @@ bool RdmaSocket::_RdmaBatchWrite(uint16_t NodeID, uint64_t SourceBuffer, uint64_
 }
 
 bool RdmaSocket::RdmaFetchAndAdd(uint16_t NodeID, uint64_t SourceBuffer, uint64_t DesBuffer, uint64_t Add) {
+    if (NodeID >= 1000) {
+        Debug::notifyError("RdmaFetchAndAdd: invalid NodeID %d", NodeID);
+        return false;
+    }
     //assert(peers[NodeID]);
     struct ibv_sge sg;
     struct ibv_send_wr wr;
@@ -1103,6 +1313,10 @@ bool RdmaSocket::RdmaFetchAndAdd(uint16_t NodeID, uint64_t SourceBuffer, uint64_
 }
 
 bool RdmaSocket::RdmaCompareAndSwap(uint16_t NodeID, uint64_t SourceBuffer, uint64_t DesBuffer, uint64_t Compare, uint64_t Swap) {
+    if (NodeID >= 1000) {
+        Debug::notifyError("RdmaCompareAndSwap: invalid NodeID %d", NodeID);
+        return false;
+    }
     //assert(peers[NodeID]);
     struct ibv_sge sg;
     struct ibv_send_wr wr;
@@ -1132,15 +1346,25 @@ bool RdmaSocket::RdmaCompareAndSwap(uint16_t NodeID, uint64_t SourceBuffer, uint
 }
 
 int RdmaSocket::PollCompletion(uint16_t NodeID, int PollNumber, struct ibv_wc *wc) {
-    int count = 0;
-     
-    do {
-        count += ibv_poll_cq(peers[NodeID]->cq, 1, wc);
-    } while (count < PollNumber);
-     
-    if (count < 0) {
-        Debug::notifyError("Poll Completion failed.");
+    if (!isRunning) {
         return -1;
+    }
+    if (NodeID >= 1000 || peers[NodeID] == NULL || peers[NodeID]->cq == NULL) {
+        Debug::notifyError("PollCompletion: invalid peer/cq (NodeID=%d)", NodeID);
+        return -1;
+    }
+    int count = 0;
+
+    while (count < PollNumber) {
+        if (!isRunning) {
+            return -1;
+        }
+        int rc = ibv_poll_cq(peers[NodeID]->cq, 1, wc);
+        if (rc < 0) {
+            Debug::notifyError("PollCompletion: ibv_poll_cq failed (NodeID=%d, rc=%d)", NodeID, rc);
+            return -1;
+        }
+        count += rc;
     }
      
     /* Check Completion Status */
@@ -1155,17 +1379,23 @@ int RdmaSocket::PollCompletion(uint16_t NodeID, int PollNumber, struct ibv_wc *w
 }
 
 int RdmaSocket::PollWithCQ(int cqPtr, int PollNumber, struct ibv_wc *wc) {
-    int count = 0;
-     
-    do {
-        count += ibv_poll_cq(cq[cqPtr], 1, wc);
-    } while (count < PollNumber);
-
-    if (count < 0) {
-        Debug::notifyError("Poll Completion failed.");
+    if (!isRunning) {
         return -1;
     }
-    
+    int count = 0;
+
+    while (count < PollNumber) {
+        if (!isRunning) {
+            return -1;
+        }
+        int rc = ibv_poll_cq(cq[cqPtr], 1, wc);
+        if (rc < 0) {
+            Debug::notifyError("PollWithCQ: ibv_poll_cq failed (cqPtr=%d, rc=%d)", cqPtr, rc);
+            return -1;
+        }
+        count += rc;
+    }
+
     /* Check Completion Status */
     if (wc->status != IBV_WC_SUCCESS) {
         Debug::notifyError("Failed status %s (%d) for wr_id %d", 
@@ -1178,6 +1408,9 @@ int RdmaSocket::PollWithCQ(int cqPtr, int PollNumber, struct ibv_wc *wc) {
 }
 
 int RdmaSocket::PollOnce(int cqPtr, int PollNumber, struct ibv_wc *wc) {
+    if (!isRunning) {
+        return -1;
+    }
     int count = ibv_poll_cq(cq[cqPtr], PollNumber, wc);
     if (count == 0) {
         return 0;
@@ -1203,8 +1436,9 @@ uint16_t RdmaSocket::getNodeID() {
     return MyNodeID;
 }
 void RdmaSocket::WaitClientConnection(uint16_t NodeID) {
-    while(peers[NodeID] == NULL)
+    while (isRunning && peers[NodeID] == NULL) {
         usleep(1);
+    }
 }
 
 PeerSockData* RdmaSocket::getPeerInformation(uint16_t NodeID) {

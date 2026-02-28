@@ -1,5 +1,6 @@
 #ifndef RPCSERVER_HREADER
 #define RPCSERVER_HREADER
+#include <atomic>
 #include <thread>
 #include <unordered_map>
 #include <vector>
@@ -24,6 +25,7 @@ typedef struct {
 class RPCServer {
 private:
 	thread *wk;
+	std::atomic<bool> running;
 	Configuration *conf;
 	RdmaSocket *socket;
 	MemoryManager *mem;

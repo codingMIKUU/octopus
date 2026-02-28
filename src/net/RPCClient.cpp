@@ -57,10 +57,11 @@ bool RPCClient::RdmaCall(uint16_t DesNodeID, char *bufferSend, uint64_t lengthSe
 		remoteRecvBuffer = (socket->getNodeID() - conf->getServerCount() - 1) * CLIENT_MESSAGE_SIZE;
 	}
 	GeneralReceiveBuffer *recv = (GeneralReceiveBuffer*)receiveBuffer;
-	if (isServer)
-		recv->message = MESSAGE_INVALID;
+	recv->message = MESSAGE_INVALID;
 	memcpy((void *)sendBuffer, (void *)bufferSend, lengthSend);
-	_mm_clflush(recv);
+	for (uint64_t off = 0; off < lengthReceive; off += 64) {
+		_mm_clflush((void *)(receiveBuffer + off));
+	}
 	asm volatile ("sfence\n" : : );
 	temp = (uint32_t)offset;
 	imm = imm + (temp << 16);
@@ -73,7 +74,10 @@ bool RPCClient::RdmaCall(uint16_t DesNodeID, char *bufferSend, uint64_t lengthSe
 		// socket->PollCompletion(DesNodeID, 1, &wc);
 		return true;
 	}
-	socket->_RdmaBatchWrite(DesNodeID, sendBuffer, remoteRecvBuffer, lengthSend, imm, 1);
+	if (!socket->_RdmaBatchWrite(DesNodeID, sendBuffer, remoteRecvBuffer, lengthSend, imm, 1)) {
+		Debug::notifyError("RdmaCall: failed to send request via RDMA to node %d", DesNodeID);
+		return false;
+	}
 	if (isServer) {
 		while (recv->message == MESSAGE_INVALID || recv->message != MESSAGE_RESPONSE)
 			;
@@ -94,6 +98,22 @@ bool RPCClient::RdmaCall(uint16_t DesNodeID, char *bufferSend, uint64_t lengthSe
 			}*/
 		}
 	}
+	if (send->message == MESSAGE_EXTENTWRITE) {
+		ExtentWriteReceiveBuffer *wr = (ExtentWriteReceiveBuffer *)receiveBuffer;
+		uint32_t spin = 0;
+		while (wr->fpi.len > MAX_MESSAGE_BLOCK_COUNT && spin < 1000000) {
+			asm volatile("pause" ::: "memory");
+			spin += 1;
+		}
+	} else if (send->message == MESSAGE_EXTENTREAD) {
+		ExtentReadReceiveBuffer *rr = (ExtentReadReceiveBuffer *)receiveBuffer;
+		uint32_t spin = 0;
+		while (rr->fpi.len > MAX_MESSAGE_BLOCK_COUNT && spin < 1000000) {
+			asm volatile("pause" ::: "memory");
+			spin += 1;
+		}
+	}
+	asm volatile ("lfence\n" : : );
 	memcpy((void*)bufferReceive, (void *)receiveBuffer, lengthReceive);
 	return true;
 }

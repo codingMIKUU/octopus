@@ -1,0 +1,11 @@
+/root/zxm/octopus/build/CMakeFiles/nrfstest.dir
+/root/zxm/octopus/build/CMakeFiles/mpitest.dir
+/root/zxm/octopus/build/CMakeFiles/edit_cache.dir
+/root/zxm/octopus/build/CMakeFiles/mpibw.dir
+/root/zxm/octopus/build/CMakeFiles/nrfsCli.dir
+/root/zxm/octopus/build/CMakeFiles/locktest.dir
+/root/zxm/octopus/build/CMakeFiles/jninrfs.dir
+/root/zxm/octopus/build/CMakeFiles/nrfsc.dir
+/root/zxm/octopus/build/CMakeFiles/rebuild_cache.dir
+/root/zxm/octopus/build/CMakeFiles/fusenrfs.dir
+/root/zxm/octopus/build/CMakeFiles/dmfs.dir

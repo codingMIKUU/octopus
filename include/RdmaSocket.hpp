@@ -94,6 +94,7 @@ private:
 	uint16_t				MyNodeID;		/* My NodeID, used for identification. */
 	uint16_t 				MaxNodeID;		/* Max NodeID for client */
 	thread 					Listener;		/* Wait for client connection */
+	int                     listenSock;
 	uint8_t					Mode;			/* RC-0, UC-1, UD-2 */
 	int 					ServerCount;	/* The total number of servers */
 	Queue<TransferTask *>   queue[WORKER_NUMBER];/* Used for Data transfer. */
@@ -123,6 +124,11 @@ public:
 	struct ibv_mr			*mr;			/* Memory registration handler */
 	RdmaSocket(int _cqNum, uint64_t _mm, uint64_t _mmSize, Configuration* _conf, bool isServer, uint8_t Mode);
 	~RdmaSocket();
+	/*
+	 * Request a graceful shutdown. This is intended to unblock polling/wait loops
+	 * so RPCServer worker threads can exit.
+	 */
+	void Stop();
 	/* Called by server side to accept the connection of clients. */
 	void RdmaListen();
 	/* Called by client side to connect to each of server actively. */

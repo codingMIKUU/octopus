@@ -432,6 +432,7 @@ int nrfsAccess(nrfs fs, const char* _path)
 	uint16_t node_id = get_node_id_by_path(sendBuffer.path);
 	
 	sendMessage(node_id, &sendBuffer, sizeof(GeneralSendBuffer), 
+	
 					&receiveBuffer, sizeof(GeneralReceiveBuffer));
 	if(receiveBuffer.result)
 		return 0;
@@ -459,6 +460,7 @@ int nrfsWrite(nrfs fs, nrfsFile _file, const void* buffer, uint64_t size, uint64
 	uint64_t length_copied = 0;
     ExtentWriteSendBuffer bufferExtentWriteSend; /* Send buffer. */
     ExtentWriteReceiveBuffer bufferExtentWriteReceive;
+	memset(&bufferExtentWriteReceive, 0, sizeof(ExtentWriteReceiveBuffer));
 
     bufferExtentWriteSend.message = MESSAGE_EXTENTWRITE; /* Assign message type. */
     
@@ -473,17 +475,28 @@ int nrfsWrite(nrfs fs, nrfsFile _file, const void* buffer, uint64_t size, uint64
 	WriteTime1 += diff;
 
 	gettimeofday(&start1, NULL);
-	sendMessage(node_id, &bufferExtentWriteSend, sizeof(ExtentWriteSendBuffer), 
-					&bufferExtentWriteReceive, sizeof(ExtentWriteReceiveBuffer));
+	if (!sendMessage(node_id, &bufferExtentWriteSend, sizeof(ExtentWriteSendBuffer), 
+					&bufferExtentWriteReceive, sizeof(ExtentWriteReceiveBuffer))) {
+		Debug::notifyError("nrfsWrite: sendMessage failed, node_id=%d", node_id);
+		return -1;
+	}
 	gettimeofday(&end1, NULL);
 	diff = 1000000 * (end1.tv_sec - start1.tv_sec) + end1.tv_usec - start1.tv_usec;
 	WriteTime2 += diff;
 
 	if(bufferExtentWriteReceive.result == true) {
 		fpi = bufferExtentWriteReceive.fpi;
+		if (fpi.len > MAX_MESSAGE_BLOCK_COUNT) {
+			Debug::notifyError("nrfsWrite: invalid fpi.len=%u", fpi.len);
+			return -1;
+		}
 		gettimeofday(&start1, NULL);
 		for(int i = 0; i < (int)fpi.len; i++)
 		{
+			if (fpi.tuple[i].node_id == 0 || fpi.tuple[i].node_id >= 1000) {
+				Debug::notifyError("nrfsWrite: invalid tuple node_id=%u", fpi.tuple[i].node_id);
+				return -1;
+			}
 			Debug::debugItem("fpi: i = %d, node_id = %d,offset = %x, size = %d", 
 				i, fpi.tuple[i].node_id, fpi.tuple[i].offset, fpi.tuple[i].size);
 			if(/*fpi.node_id[i] == (uint16_t)fs*/0)
@@ -494,10 +507,13 @@ int nrfsWrite(nrfs fs, nrfsFile _file, const void* buffer, uint64_t size, uint64
 			}
 			else
 			{
-				client->getRdmaSocketInstance()->RemoteWrite((uint64_t)((char*)buffer + length_copied), 
+				if (!client->getRdmaSocketInstance()->RemoteWrite((uint64_t)((char*)buffer + length_copied), 
 					              fpi.tuple[i].node_id,
                                   fpi.tuple[i].offset + DmfsDataOffset,
-                                  fpi.tuple[i].size);
+					              fpi.tuple[i].size)) {
+					Debug::notifyError("nrfsWrite: RemoteWrite failed, node_id=%d size=%lu", fpi.tuple[i].node_id, fpi.tuple[i].size);
+					return -1;
+				}
 			}
 			length_copied += fpi.tuple[i].size;
 		}
@@ -546,6 +562,7 @@ int nrfsRead(nrfs fs, nrfsFile _file, void* buffer, uint64_t size, uint64_t offs
 	uint64_t length_copied = 0;
     ExtentReadSendBuffer bufferExtentReadSend; /* Send buffer. */
     ExtentReadReceiveBuffer bufferExtentReadReceive;
+	memset(&bufferExtentReadReceive, 0, sizeof(ExtentReadReceiveBuffer));
 
     bufferExtentReadSend.message = MESSAGE_EXTENTREAD;
     
@@ -559,16 +576,27 @@ int nrfsRead(nrfs fs, nrfsFile _file, void* buffer, uint64_t size, uint64_t offs
 	diff = 1000000 * (end1.tv_sec - start1.tv_sec) + end1.tv_usec - start1.tv_usec;
 	ReadTime1 += diff;
 	gettimeofday(&start1, NULL);
-	sendMessage(node_id, &bufferExtentReadSend, sizeof(ExtentReadSendBuffer), 
-					&bufferExtentReadReceive, sizeof(ExtentReadReceiveBuffer));
+	if (!sendMessage(node_id, &bufferExtentReadSend, sizeof(ExtentReadSendBuffer), 
+					&bufferExtentReadReceive, sizeof(ExtentReadReceiveBuffer))) {
+		Debug::notifyError("nrfsRead: sendMessage failed, node_id=%d", node_id);
+		return -1;
+	}
 	gettimeofday(&end1, NULL);
 	diff = 1000000 * (end1.tv_sec - start1.tv_sec) + end1.tv_usec - start1.tv_usec;
 	ReadTime2 += diff;
 	if(bufferExtentReadReceive.result == true) {
 		fpi = bufferExtentReadReceive.fpi;
+		if (fpi.len > MAX_MESSAGE_BLOCK_COUNT) {
+			Debug::notifyError("nrfsRead: invalid fpi.len=%u", fpi.len);
+			return -1;
+		}
 		gettimeofday(&start1, NULL);
 		for(int i = 0; i < (int)fpi.len; i++)
 		{
+			if (fpi.tuple[i].node_id == 0 || fpi.tuple[i].node_id >= 1000) {
+				Debug::notifyError("nrfsRead: invalid tuple node_id=%u", fpi.tuple[i].node_id);
+				return -1;
+			}
 			Debug::debugItem("fpi: i = %d, node_id = %d,offset = %x, size = %d", 
 				i, fpi.tuple[i].node_id, fpi.tuple[i].offset, fpi.tuple[i].size);
 			if(/*fpi.node_id[i] == (uint16_t)fs*/0)
@@ -579,10 +607,13 @@ int nrfsRead(nrfs fs, nrfsFile _file, void* buffer, uint64_t size, uint64_t offs
 			}
 			else
 			{
-				client->getRdmaSocketInstance()->RemoteRead((uint64_t)((char*)buffer + length_copied), 
+				if (!client->getRdmaSocketInstance()->RemoteRead((uint64_t)((char*)buffer + length_copied), 
 					              fpi.tuple[i].node_id,
                                   fpi.tuple[i].offset + DmfsDataOffset, 
-                                  fpi.tuple[i].size);
+					              fpi.tuple[i].size)) {
+					Debug::notifyError("nrfsRead: RemoteRead failed, node_id=%d size=%lu", fpi.tuple[i].node_id, fpi.tuple[i].size);
+					return -1;
+				}
 			}
 			length_copied += fpi.tuple[i].size;
 		}
