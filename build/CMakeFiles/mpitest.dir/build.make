@@ -82,7 +82,7 @@ mpitest: CMakeFiles/mpitest.dir/build.make
 mpitest: /usr/lib/x86_64-linux-gnu/libcrypto.so
 mpitest: libnrfsc.so
 mpitest: /usr/lib/x86_64-linux-gnu/libcrypto.so
-mpitest: /usr/lib/x86_64-linux-gnu/libibverbs.so
+mpitest: /root/zxm/rdma-core/build/lib/libibverbs.so
 mpitest: /usr/lib/x86_64-linux-gnu/libfuse.so
 mpitest: CMakeFiles/mpitest.dir/link.txt
 	@$(CMAKE_COMMAND) -E cmake_echo_color --switch=$(COLOR) --green --bold --progress-dir=/root/zxm/octopus/build/CMakeFiles --progress-num=$(CMAKE_PROGRESS_2) "Linking CXX executable mpitest"

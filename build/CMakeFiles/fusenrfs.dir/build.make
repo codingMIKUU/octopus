@@ -82,7 +82,7 @@ fusenrfs: CMakeFiles/fusenrfs.dir/build.make
 fusenrfs: /usr/lib/x86_64-linux-gnu/libcrypto.so
 fusenrfs: libnrfsc.so
 fusenrfs: /usr/lib/x86_64-linux-gnu/libcrypto.so
-fusenrfs: /usr/lib/x86_64-linux-gnu/libibverbs.so
+fusenrfs: /root/zxm/rdma-core/build/lib/libibverbs.so
 fusenrfs: /usr/lib/x86_64-linux-gnu/libfuse.so
 fusenrfs: CMakeFiles/fusenrfs.dir/link.txt
 	@$(CMAKE_COMMAND) -E cmake_echo_color --switch=$(COLOR) --green --bold --progress-dir=/root/zxm/octopus/build/CMakeFiles --progress-num=$(CMAKE_PROGRESS_2) "Linking CXX executable fusenrfs"

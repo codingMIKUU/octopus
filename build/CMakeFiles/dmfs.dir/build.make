@@ -275,7 +275,7 @@ dmfs: CMakeFiles/dmfs.dir/src/net/mempool.cpp.o
 dmfs: CMakeFiles/dmfs.dir/src/tools/debug.cpp.o
 dmfs: CMakeFiles/dmfs.dir/build.make
 dmfs: /usr/lib/x86_64-linux-gnu/libcrypto.so
-dmfs: /usr/lib/x86_64-linux-gnu/libibverbs.so
+dmfs: /root/zxm/rdma-core/build/lib/libibverbs.so
 dmfs: /usr/lib/x86_64-linux-gnu/libfuse.so
 dmfs: CMakeFiles/dmfs.dir/link.txt
 	@$(CMAKE_COMMAND) -E cmake_echo_color --switch=$(COLOR) --green --bold --progress-dir=/root/zxm/octopus/build/CMakeFiles --progress-num=$(CMAKE_PROGRESS_15) "Linking CXX executable dmfs"

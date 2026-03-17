@@ -219,7 +219,7 @@ CRYPTO_LIBRARIES:FILEPATH=/usr/lib/x86_64-linux-gnu/libcrypto.so
 FUSE_LIB:FILEPATH=/usr/lib/x86_64-linux-gnu/libfuse.so
 
 //Path to a library.
-IBVERBS_LIB:FILEPATH=/usr/lib/x86_64-linux-gnu/libibverbs.so
+IBVERBS_LIB:FILEPATH=/root/zxm/rdma-core/build/lib/libibverbs.so
 
 //Path to a file.
 JAVA_AWT_INCLUDE_PATH:PATH=/usr/java/include
@@ -304,6 +304,9 @@ MPI_mpi_LIBRARY:FILEPATH=/usr/lib/x86_64-linux-gnu/openmpi/lib/libmpi.so
 //Location of the mpi_cxx library for MPI
 MPI_mpi_cxx_LIBRARY:FILEPATH=/usr/lib/x86_64-linux-gnu/openmpi/lib/libmpi_cxx.so
 
+//Path to rdma-core source tree (contains build/lib and build/include)
+RDMA_CORE_ROOT:PATH=/root/zxm/rdma-core
+
 //Turn on sanitization
 SANITIZE:BOOL=OFF
 
@@ -314,10 +317,10 @@ dmfs_BINARY_DIR:STATIC=/root/zxm/octopus/build
 dmfs_SOURCE_DIR:STATIC=/root/zxm/octopus
 
 //Dependencies for the target
-jninrfs_LIB_DEPENDS:STATIC=general;/usr/lib/x86_64-linux-gnu/libcrypto.so;general;libcryptopp.so;general;dl;general;/usr/lib/x86_64-linux-gnu/libibverbs.so;general;/usr/lib/x86_64-linux-gnu/libfuse.so;
+jninrfs_LIB_DEPENDS:STATIC=general;/usr/lib/x86_64-linux-gnu/libcrypto.so;general;libcryptopp.so;general;dl;general;/root/zxm/rdma-core/build/lib/libibverbs.so;general;/usr/lib/x86_64-linux-gnu/libfuse.so;
 
 //Dependencies for the target
-nrfsc_LIB_DEPENDS:STATIC=general;/usr/lib/x86_64-linux-gnu/libcrypto.so;general;libcryptopp.so;general;dl;general;/usr/lib/x86_64-linux-gnu/libibverbs.so;general;/usr/lib/x86_64-linux-gnu/libfuse.so;
+nrfsc_LIB_DEPENDS:STATIC=general;/usr/lib/x86_64-linux-gnu/libcrypto.so;general;libcryptopp.so;general;dl;general;/root/zxm/rdma-core/build/lib/libibverbs.so;general;/usr/lib/x86_64-linux-gnu/libfuse.so;
 
 
 ########################

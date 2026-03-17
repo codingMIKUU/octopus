@@ -7,11 +7,11 @@ C_FLAGS = -Wall -Wno-deprecated-declarations -Wsign-compare   -pthread
 
 C_DEFINES = 
 
-C_INCLUDES = -I/usr/local/ofed/include -I/root/zxm/octopus/include -I/usr/java/include -I/usr/java/include/linux 
+C_INCLUDES = -I/root/zxm/rdma-core/build/include -I/root/zxm/octopus/include -I/usr/java/include -I/usr/java/include/linux 
 
 CXX_FLAGS = -g -Wall -Wno-deprecated-declarations -Wsign-compare -std=c++11 -Wall -O0 -DTHREAD -D_FILE_OFFSET_BITS=64   -pthread
 
 CXX_DEFINES = 
 
-CXX_INCLUDES = -I/usr/local/ofed/include -I/root/zxm/octopus/include -I/usr/java/include -I/usr/java/include/linux 
+CXX_INCLUDES = -I/root/zxm/rdma-core/build/include -I/root/zxm/octopus/include -I/usr/java/include -I/usr/java/include/linux 
 

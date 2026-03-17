@@ -6,5 +6,5 @@ CXX_FLAGS = -g -Wall -Wno-deprecated-declarations -Wsign-compare -std=c++11 -Wal
 
 CXX_DEFINES = -Dnrfsc_EXPORTS
 
-CXX_INCLUDES = -I/usr/local/ofed/include -I/root/zxm/octopus/include -I/usr/java/include -I/usr/java/include/linux 
+CXX_INCLUDES = -I/root/zxm/rdma-core/build/include -I/root/zxm/octopus/include -I/usr/java/include -I/usr/java/include/linux 
 

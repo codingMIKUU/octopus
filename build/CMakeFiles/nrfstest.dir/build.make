@@ -82,7 +82,7 @@ nrfstest: CMakeFiles/nrfstest.dir/build.make
 nrfstest: /usr/lib/x86_64-linux-gnu/libcrypto.so
 nrfstest: libnrfsc.so
 nrfstest: /usr/lib/x86_64-linux-gnu/libcrypto.so
-nrfstest: /usr/lib/x86_64-linux-gnu/libibverbs.so
+nrfstest: /root/zxm/rdma-core/build/lib/libibverbs.so
 nrfstest: /usr/lib/x86_64-linux-gnu/libfuse.so
 nrfstest: CMakeFiles/nrfstest.dir/link.txt
 	@$(CMAKE_COMMAND) -E cmake_echo_color --switch=$(COLOR) --green --bold --progress-dir=/root/zxm/octopus/build/CMakeFiles --progress-num=$(CMAKE_PROGRESS_2) "Linking CXX executable nrfstest"
