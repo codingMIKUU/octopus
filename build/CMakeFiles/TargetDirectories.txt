@@ -1,3 +1,4 @@
+/root/zxm/octopus/build/CMakeFiles/srmtput.dir
 /root/zxm/octopus/build/CMakeFiles/nrfstest.dir
 /root/zxm/octopus/build/CMakeFiles/mpitest.dir
 /root/zxm/octopus/build/CMakeFiles/edit_cache.dir

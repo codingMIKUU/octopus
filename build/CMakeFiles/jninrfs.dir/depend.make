@@ -25,6 +25,10 @@ CMakeFiles/jninrfs.dir/src/client/nrfs.cpp.o: ../include/nrfs.h
 CMakeFiles/jninrfs.dir/src/client/nrfs.cpp.o: ../include/storage.hpp
 CMakeFiles/jninrfs.dir/src/client/nrfs.cpp.o: ../include/table.hpp
 CMakeFiles/jninrfs.dir/src/client/nrfs.cpp.o: ../src/client/nrfs.cpp
+CMakeFiles/jninrfs.dir/src/client/nrfs.cpp.o: /root/zxm/rdma-core/build/include/infiniband/ib_user_ioctl_verbs.h
+CMakeFiles/jninrfs.dir/src/client/nrfs.cpp.o: /root/zxm/rdma-core/build/include/infiniband/verbs.h
+CMakeFiles/jninrfs.dir/src/client/nrfs.cpp.o: /root/zxm/rdma-core/build/include/infiniband/verbs_api.h
+CMakeFiles/jninrfs.dir/src/client/nrfs.cpp.o: /root/zxm/rdma-core/build/include/rdma/ib_user_verbs.h
 
 CMakeFiles/jninrfs.dir/src/fs/TxManager.cpp.o: ../include/TxManager.hpp
 CMakeFiles/jninrfs.dir/src/fs/TxManager.cpp.o: ../src/fs/TxManager.cpp
@@ -48,6 +52,10 @@ CMakeFiles/jninrfs.dir/src/fs/dmfs.cpp.o: ../include/mempool.hpp
 CMakeFiles/jninrfs.dir/src/fs/dmfs.cpp.o: ../include/storage.hpp
 CMakeFiles/jninrfs.dir/src/fs/dmfs.cpp.o: ../include/table.hpp
 CMakeFiles/jninrfs.dir/src/fs/dmfs.cpp.o: ../src/fs/dmfs.cpp
+CMakeFiles/jninrfs.dir/src/fs/dmfs.cpp.o: /root/zxm/rdma-core/build/include/infiniband/ib_user_ioctl_verbs.h
+CMakeFiles/jninrfs.dir/src/fs/dmfs.cpp.o: /root/zxm/rdma-core/build/include/infiniband/verbs.h
+CMakeFiles/jninrfs.dir/src/fs/dmfs.cpp.o: /root/zxm/rdma-core/build/include/infiniband/verbs_api.h
+CMakeFiles/jninrfs.dir/src/fs/dmfs.cpp.o: /root/zxm/rdma-core/build/include/rdma/ib_user_verbs.h
 
 CMakeFiles/jninrfs.dir/src/fs/filesystem.cpp.o: ../include/Configuration.hpp
 CMakeFiles/jninrfs.dir/src/fs/filesystem.cpp.o: ../include/RPCClient.hpp
@@ -65,6 +73,10 @@ CMakeFiles/jninrfs.dir/src/fs/filesystem.cpp.o: ../include/mempool.hpp
 CMakeFiles/jninrfs.dir/src/fs/filesystem.cpp.o: ../include/storage.hpp
 CMakeFiles/jninrfs.dir/src/fs/filesystem.cpp.o: ../include/table.hpp
 CMakeFiles/jninrfs.dir/src/fs/filesystem.cpp.o: ../src/fs/filesystem.cpp
+CMakeFiles/jninrfs.dir/src/fs/filesystem.cpp.o: /root/zxm/rdma-core/build/include/infiniband/ib_user_ioctl_verbs.h
+CMakeFiles/jninrfs.dir/src/fs/filesystem.cpp.o: /root/zxm/rdma-core/build/include/infiniband/verbs.h
+CMakeFiles/jninrfs.dir/src/fs/filesystem.cpp.o: /root/zxm/rdma-core/build/include/infiniband/verbs_api.h
+CMakeFiles/jninrfs.dir/src/fs/filesystem.cpp.o: /root/zxm/rdma-core/build/include/rdma/ib_user_verbs.h
 
 CMakeFiles/jninrfs.dir/src/fs/hashtable.cpp.o: ../include/bitmap.hpp
 CMakeFiles/jninrfs.dir/src/fs/hashtable.cpp.o: ../include/debug.hpp
@@ -88,6 +100,10 @@ CMakeFiles/jninrfs.dir/src/fs/lock.cpp.o: ../include/mempool.hpp
 CMakeFiles/jninrfs.dir/src/fs/lock.cpp.o: ../include/storage.hpp
 CMakeFiles/jninrfs.dir/src/fs/lock.cpp.o: ../include/table.hpp
 CMakeFiles/jninrfs.dir/src/fs/lock.cpp.o: ../src/fs/lock.cpp
+CMakeFiles/jninrfs.dir/src/fs/lock.cpp.o: /root/zxm/rdma-core/build/include/infiniband/ib_user_ioctl_verbs.h
+CMakeFiles/jninrfs.dir/src/fs/lock.cpp.o: /root/zxm/rdma-core/build/include/infiniband/verbs.h
+CMakeFiles/jninrfs.dir/src/fs/lock.cpp.o: /root/zxm/rdma-core/build/include/infiniband/verbs_api.h
+CMakeFiles/jninrfs.dir/src/fs/lock.cpp.o: /root/zxm/rdma-core/build/include/rdma/ib_user_verbs.h
 
 CMakeFiles/jninrfs.dir/src/fs/storage.cpp.o: ../include/bitmap.hpp
 CMakeFiles/jninrfs.dir/src/fs/storage.cpp.o: ../include/common.hpp
@@ -97,6 +113,10 @@ CMakeFiles/jninrfs.dir/src/fs/storage.cpp.o: ../include/hashtable.hpp
 CMakeFiles/jninrfs.dir/src/fs/storage.cpp.o: ../include/storage.hpp
 CMakeFiles/jninrfs.dir/src/fs/storage.cpp.o: ../include/table.hpp
 CMakeFiles/jninrfs.dir/src/fs/storage.cpp.o: ../src/fs/storage.cpp
+CMakeFiles/jninrfs.dir/src/fs/storage.cpp.o: /root/zxm/rdma-core/build/include/infiniband/ib_user_ioctl_verbs.h
+CMakeFiles/jninrfs.dir/src/fs/storage.cpp.o: /root/zxm/rdma-core/build/include/infiniband/verbs.h
+CMakeFiles/jninrfs.dir/src/fs/storage.cpp.o: /root/zxm/rdma-core/build/include/infiniband/verbs_api.h
+CMakeFiles/jninrfs.dir/src/fs/storage.cpp.o: /root/zxm/rdma-core/build/include/rdma/ib_user_verbs.h
 
 CMakeFiles/jninrfs.dir/src/net/Configuration.cpp.o: ../include/Configuration.hpp
 CMakeFiles/jninrfs.dir/src/net/Configuration.cpp.o: ../include/debug.hpp
@@ -111,6 +131,10 @@ CMakeFiles/jninrfs.dir/src/net/RPCClient.cpp.o: ../include/debug.hpp
 CMakeFiles/jninrfs.dir/src/net/RPCClient.cpp.o: ../include/global.h
 CMakeFiles/jninrfs.dir/src/net/RPCClient.cpp.o: ../include/mempool.hpp
 CMakeFiles/jninrfs.dir/src/net/RPCClient.cpp.o: ../src/net/RPCClient.cpp
+CMakeFiles/jninrfs.dir/src/net/RPCClient.cpp.o: /root/zxm/rdma-core/build/include/infiniband/ib_user_ioctl_verbs.h
+CMakeFiles/jninrfs.dir/src/net/RPCClient.cpp.o: /root/zxm/rdma-core/build/include/infiniband/verbs.h
+CMakeFiles/jninrfs.dir/src/net/RPCClient.cpp.o: /root/zxm/rdma-core/build/include/infiniband/verbs_api.h
+CMakeFiles/jninrfs.dir/src/net/RPCClient.cpp.o: /root/zxm/rdma-core/build/include/rdma/ib_user_verbs.h
 
 CMakeFiles/jninrfs.dir/src/net/RPCServer.cpp.o: ../include/Configuration.hpp
 CMakeFiles/jninrfs.dir/src/net/RPCServer.cpp.o: ../include/RPCClient.hpp
@@ -128,6 +152,10 @@ CMakeFiles/jninrfs.dir/src/net/RPCServer.cpp.o: ../include/mempool.hpp
 CMakeFiles/jninrfs.dir/src/net/RPCServer.cpp.o: ../include/storage.hpp
 CMakeFiles/jninrfs.dir/src/net/RPCServer.cpp.o: ../include/table.hpp
 CMakeFiles/jninrfs.dir/src/net/RPCServer.cpp.o: ../src/net/RPCServer.cpp
+CMakeFiles/jninrfs.dir/src/net/RPCServer.cpp.o: /root/zxm/rdma-core/build/include/infiniband/ib_user_ioctl_verbs.h
+CMakeFiles/jninrfs.dir/src/net/RPCServer.cpp.o: /root/zxm/rdma-core/build/include/infiniband/verbs.h
+CMakeFiles/jninrfs.dir/src/net/RPCServer.cpp.o: /root/zxm/rdma-core/build/include/infiniband/verbs_api.h
+CMakeFiles/jninrfs.dir/src/net/RPCServer.cpp.o: /root/zxm/rdma-core/build/include/rdma/ib_user_verbs.h
 
 CMakeFiles/jninrfs.dir/src/net/RdmaSocket.cpp.o: ../include/Configuration.hpp
 CMakeFiles/jninrfs.dir/src/net/RdmaSocket.cpp.o: ../include/RdmaSocket.hpp
@@ -135,12 +163,20 @@ CMakeFiles/jninrfs.dir/src/net/RdmaSocket.cpp.o: ../include/common.hpp
 CMakeFiles/jninrfs.dir/src/net/RdmaSocket.cpp.o: ../include/debug.hpp
 CMakeFiles/jninrfs.dir/src/net/RdmaSocket.cpp.o: ../include/global.h
 CMakeFiles/jninrfs.dir/src/net/RdmaSocket.cpp.o: ../src/net/RdmaSocket.cpp
+CMakeFiles/jninrfs.dir/src/net/RdmaSocket.cpp.o: /root/zxm/rdma-core/build/include/infiniband/ib_user_ioctl_verbs.h
+CMakeFiles/jninrfs.dir/src/net/RdmaSocket.cpp.o: /root/zxm/rdma-core/build/include/infiniband/verbs.h
+CMakeFiles/jninrfs.dir/src/net/RdmaSocket.cpp.o: /root/zxm/rdma-core/build/include/infiniband/verbs_api.h
+CMakeFiles/jninrfs.dir/src/net/RdmaSocket.cpp.o: /root/zxm/rdma-core/build/include/rdma/ib_user_verbs.h
 
 CMakeFiles/jninrfs.dir/src/net/mempool.cpp.o: ../include/common.hpp
 CMakeFiles/jninrfs.dir/src/net/mempool.cpp.o: ../include/debug.hpp
 CMakeFiles/jninrfs.dir/src/net/mempool.cpp.o: ../include/global.h
 CMakeFiles/jninrfs.dir/src/net/mempool.cpp.o: ../include/mempool.hpp
 CMakeFiles/jninrfs.dir/src/net/mempool.cpp.o: ../src/net/mempool.cpp
+CMakeFiles/jninrfs.dir/src/net/mempool.cpp.o: /root/zxm/rdma-core/build/include/infiniband/ib_user_ioctl_verbs.h
+CMakeFiles/jninrfs.dir/src/net/mempool.cpp.o: /root/zxm/rdma-core/build/include/infiniband/verbs.h
+CMakeFiles/jninrfs.dir/src/net/mempool.cpp.o: /root/zxm/rdma-core/build/include/infiniband/verbs_api.h
+CMakeFiles/jninrfs.dir/src/net/mempool.cpp.o: /root/zxm/rdma-core/build/include/rdma/ib_user_verbs.h
 
 CMakeFiles/jninrfs.dir/src/tools/debug.cpp.o: ../include/debug.hpp
 CMakeFiles/jninrfs.dir/src/tools/debug.cpp.o: ../src/tools/debug.cpp

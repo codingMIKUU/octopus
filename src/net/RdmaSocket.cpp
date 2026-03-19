@@ -10,6 +10,28 @@
 #include <mutex>
 #include <unordered_set>
 
+static bool octopus_gid_all_zero(const union ibv_gid &gid) {
+    for (int i = 0; i < 16; ++i) {
+        if (gid.raw[i] != 0) {
+            return false;
+        }
+    }
+    return true;
+}
+
+static int octopus_pick_valid_gid_index(struct ibv_context *ctx, uint8_t port, int maxProbe = 32) {
+    union ibv_gid gid;
+    for (int idx = 0; idx < maxProbe; ++idx) {
+        if (ibv_query_gid(ctx, port, idx, &gid) != 0) {
+            continue;
+        }
+        if (!octopus_gid_all_zero(gid)) {
+            return idx;
+        }
+    }
+    return -1;
+}
+
 static bool octopus_get_local_ipv4_addrs(std::vector<std::string> &out) {
     struct ifaddrs *ifaddr = nullptr;
     if (getifaddrs(&ifaddr) != 0) {
@@ -78,10 +100,17 @@ static inline void octopus_log_wqe(uint16_t local_id, uint16_t remote_id, uint64
 
 using namespace std;
 
-RdmaSocket::RdmaSocket(int _cqNum, uint64_t _mm, uint64_t _mmSize, Configuration* _conf, bool _isServer, uint8_t _Mode) :
+int RdmaSocket::PickDataQpBySize(uint64_t size) const {
+    if (size >= DATA_QP_SPLIT_SIZE) {
+        return DATA_QP_LARGE_INDEX;
+    }
+    return DATA_QP_SMALL_INDEX;
+}
+
+RdmaSocket::RdmaSocket(int _cqNum, uint64_t _mm, uint64_t _mmSize, Configuration* _conf, bool _isServer, uint8_t _Mode, uint32_t _srmAppThreads) :
 DeviceName(NULL), Port(1), ServerPort(5678), GidIndex(0), 
 isRunning(true), isServer(_isServer), cqNum(_cqNum), cqPtr(0), 
-mm(_mm), mmSize(_mmSize), conf(_conf), MaxNodeID(1), listenSock(-1), Mode(_Mode) {
+mm(_mm), mmSize(_mmSize), conf(_conf), MaxNodeID(1), listenSock(-1), Mode(_Mode), srmAppThreads(_srmAppThreads) {
     for (int i = 0; i < 1000; i++) {
         peers[i] = NULL;
     }
@@ -112,18 +141,13 @@ mm(_mm), mmSize(_mmSize), conf(_conf), MaxNodeID(1), listenSock(-1), Mode(_Mode)
         cqPtr = 0;
     }
 	CreateResources();
-    if (!isServer) {
-        for (int  i = 0; i < WORKER_NUMBER; i++) {
-            WriteSize[i] = 0;
-            ReadSize[i] = 0;
-            WriteTimeCost[i] = 0;
-            ReadTimeCost[i] = 0;
-        }
-        WriteTest = false;
-        for (int i = 0; i < WORKER_NUMBER; i ++) {
-            worker[i] = thread(&RdmaSocket::DataTransferWorker, this, i);
-        }
+    for (int  i = 0; i < WORKER_NUMBER; i++) {
+        WriteSize[i] = 0;
+        ReadSize[i] = 0;
+        WriteTimeCost[i] = 0;
+        ReadTimeCost[i] = 0;
     }
+    WriteTest = false;
 }
 
 RdmaSocket::~RdmaSocket() {
@@ -139,10 +163,6 @@ RdmaSocket::~RdmaSocket() {
 		if (Listener.joinable()) {
 			Listener.join();
 		}
-    } else {
-        for (int i = 0; i < WORKER_NUMBER; i++) {
-            worker[i].detach();
-        }
     }
     Debug::debugItem("2");
 	ResourcesDestroy();
@@ -222,6 +242,24 @@ bool RdmaSocket::CreateResources() {
         Debug::notifyError("ibv_query_port failed");
         rc = 1;
         goto CreateResourcesExit;
+    }
+    if (PortAttribute.lid == 0) {
+        int pickedGidIndex = octopus_pick_valid_gid_index(ctx, Port);
+        if (pickedGidIndex < 0) {
+            Debug::notifyError("RoCE detected (lid=0) but no valid GID found on port %d", Port);
+            rc = 1;
+            goto CreateResourcesExit;
+        }
+        GidIndex = pickedGidIndex;
+        union ibv_gid gid;
+        if (ibv_query_gid(ctx, Port, GidIndex, &gid) == 0) {
+            Debug::notifyInfo("RoCE mode: use GID index %d, gid=%02x:%02x:%02x:%02x:%02x:%02x:%02x:%02x:%02x:%02x:%02x:%02x:%02x:%02x:%02x:%02x",
+                GidIndex,
+                gid.raw[0], gid.raw[1], gid.raw[2], gid.raw[3],
+                gid.raw[4], gid.raw[5], gid.raw[6], gid.raw[7],
+                gid.raw[8], gid.raw[9], gid.raw[10], gid.raw[11],
+                gid.raw[12], gid.raw[13], gid.raw[14], gid.raw[15]);
+        }
     }
     Debug::notifyInfo("Create Completion Queue");
     /* Create CQ for a certain number. */
@@ -317,43 +355,88 @@ bool RdmaSocket::CreateQueuePair(PeerSockData *peer, int offset) {
     attr.sq_sig_all = 0;
 
     if (isServer && peer->NodeID > 0 && peer->NodeID <= ServerCount) {
-        /* Server interconnect, use cq at 0. */
+        /* Server interconnect: always use CQ 0. */
         attr.send_cq = cq[0];
         attr.recv_cq = cq[0];
         peer->cq = cq[0];
     } else if (isServer) {
         /* Connection between server and client. */
-	if (offset == 0) {
- 		/* Each client will create two qps, we use same cq at server side. */
-		cqPtr += 1;
-		if (cqPtr >= cqNum)
-			cqPtr = 1;
-	}
+        if (offset == 0) {
+            /* Each client will create two qps, we use same cq at server side. */
+            cqPtr += 1;
+            if (cqPtr >= cqNum)
+                cqPtr = 1;
+        }
         attr.send_cq = cq[cqPtr];
         attr.recv_cq = cq[cqPtr];
         peer->cq = cq[cqPtr];
-    } else if (!isServer) {
-        /* Client only have one CQ, so never change. */
-        attr.send_cq = cq[cqPtr];
-        attr.recv_cq = cq[cqPtr];
-        peer->cq = cq[cqPtr];
-        cqPtr += 1;
-        if (cqPtr >= cqNum) {
-            cqPtr = 0;
-        } 
+    } else {
+        /* Client: one CQ per peer, and all QPs of that peer share it. */
+        if (offset == CONTROL_QP_INDEX) {
+            int next = cqPtr;
+            cqPtr += 1;
+            if (cqPtr >= cqNum) {
+                cqPtr = 0;
+            }
+            attr.send_cq = cq[next];
+            attr.recv_cq = cq[next];
+            peer->cq = cq[next];
+        } else {
+            attr.send_cq = peer->cq;
+            attr.recv_cq = peer->cq;
+        }
     }
 
-    attr.cap.max_send_wr = QPS_MAX_DEPTH;
-    attr.cap.max_recv_wr = QPS_MAX_DEPTH;
-    attr.cap.max_send_sge = 1;
-    attr.cap.max_recv_sge = 1;
-    attr.cap.max_inline_data = 0;
-    peer->qp[offset] = ibv_create_qp(pd, &attr);
-    if (!peer->qp[offset]) {
-    	Debug::notifyError("Failed to create QP");
-    	return false;
+    if (isServer || offset == CONTROL_QP_INDEX) {
+        attr.cap.max_send_wr = QPS_MAX_DEPTH;
+        attr.cap.max_recv_wr = QPS_MAX_DEPTH;
+        attr.cap.max_send_sge = 1;
+        attr.cap.max_recv_sge = 1;
+        attr.cap.max_inline_data = 0;
+        peer->qp[offset] = ibv_create_qp(pd, &attr);
+        if (!peer->qp[offset]) {
+	        Debug::notifyError("Failed to create native QP (offset=%d)", offset);
+	        return false;
+        }
+        Debug::notifyInfo("Create native Queue Pair(offset=%d) with Num = %d", offset, peer->qp[offset]->qp_num);
+        return true;
     }
-    Debug::notifyInfo("Create Queue Pair with Num = %d", peer->qp[offset]->qp_num);
+
+    return CreateSrmDataQueuePair(peer, offset);
+}
+
+bool RdmaSocket::CreateSrmDataQueuePair(PeerSockData *peer, int offset) {
+    struct ibv_qp_init_attr_ex attr_ex;
+    memset(&attr_ex, 0, sizeof(attr_ex));
+
+    attr_ex.qp_type = (Mode == 1) ? IBV_QPT_UC : IBV_QPT_RC;
+    attr_ex.sq_sig_all = 0;
+    attr_ex.send_cq = peer->cq;
+    attr_ex.recv_cq = peer->cq;
+    attr_ex.pd = pd;
+    attr_ex.comp_mask = IBV_QP_INIT_ATTR_PD;
+
+    attr_ex.cap.max_send_wr = QPS_MAX_DEPTH;
+    attr_ex.cap.max_recv_wr = QPS_MAX_DEPTH;
+    attr_ex.cap.max_send_sge = 1;
+    attr_ex.cap.max_recv_sge = 1;
+    attr_ex.cap.max_inline_data = 0;
+
+    if (attr_ex.qp_type == IBV_QPT_RC) {
+        attr_ex.sender_side = 1;
+        attr_ex.rnode_num = 1;
+        attr_ex.srm_app_threads = (srmAppThreads > 0) ? srmAppThreads : 1;
+        attr_ex.srm_xrc_qp_num_per_srm = 1;//Server端就一个
+    }
+
+    peer->qp[offset] = ibv_create_qp_ex(ctx, &attr_ex);
+    if (!peer->qp[offset]) {
+        Debug::notifyError("Failed to create SRM data QP offset=%d", offset);
+        return false;
+    }
+
+    Debug::notifyInfo("Create SRM data Queue Pair(offset=%d) with Num = %d",
+                      offset, peer->qp[offset]->qp_num);
     return true;
 }
 
@@ -434,7 +517,7 @@ bool RdmaSocket::ModifyQPtoRTS(struct ibv_qp *qp) {
     if (Mode == 0) {
         attr.timeout = 14;
         attr.retry_cnt = 7;
-        attr.rnr_retry = 7;
+        attr.rnr_retry = 3;
         attr.max_rd_atomic = 16;
         attr.max_dest_rd_atomic = 16;
         flags |= IBV_QP_TIMEOUT | IBV_QP_RETRY_CNT | IBV_QP_RNR_RETRY | IBV_QP_MAX_QP_RD_ATOMIC;
@@ -489,14 +572,11 @@ bool RdmaSocket::ConnectQueuePair(PeerSockData *peer) {
         rc = 1;
         goto ConnectQPExit;
     }
-    if (!CreateQueuePair(peer, 1)) {
-        rc = 1;
-        goto ConnectQPExit;
-    }
+
     if (!isServer || (isServer && peer->NodeID > conf->getServerCount())) {
         /* Connection between server and client, create data channel. */
         DoubleQP = true;
-        for (int i = 2; i < QP_NUMBER; i++) {
+        for (int i = 1; i < QP_NUMBER; i++) {
             if (!CreateQueuePair(peer, i)) {
                 rc = 1;
                 goto ConnectQPExit;
@@ -534,6 +614,13 @@ bool RdmaSocket::ConnectQueuePair(PeerSockData *peer) {
 	   peer->qpNum[i] = RemoteMeta.qpNum[i];
 	peer->lid = RemoteMeta.lid;
 	peer->RegisteredMemory = RemoteMeta.RegisteredMemory;
+    Debug::notifyInfo("ConnectQP: localNode=%u peerNode=%u localQPN(ctrl)=%u remoteQPN(ctrl)=%u remoteRKey=0x%x remoteLid=0x%x",
+        (unsigned)MyNodeID,
+        (unsigned)peer->NodeID,
+        (unsigned)peer->qp[CONTROL_QP_INDEX]->qp_num,
+        (unsigned)peer->qpNum[CONTROL_QP_INDEX],
+        (unsigned)peer->rkey,
+        (unsigned)peer->lid);
 
 	memcpy(peer->gid, RemoteMeta.gid, 16);
     N = (DoubleQP) ? QP_NUMBER : 2;
@@ -582,10 +669,10 @@ int RdmaSocket::DataSyncwithSocket(int sock, int size, char *LocalData, char *Re
     while (!rc && totalReadBytes < size) {
         readBytes = read(sock, RemoteData, size);
         if (readBytes > 0) {
-	        totalReadBytes += readBytes;
+        totalReadBytes += readBytes;
         } else {
 	        rc = readBytes;
-        }
+    }
     }
     return rc;
 }
@@ -703,9 +790,13 @@ void RdmaSocket::RdmaAccept(int sock) {
             peers[peer->NodeID] = peer;
             Debug::notifyInfo("Client %d Joined Us", peer->NodeID);
             /* Rdma Receive in Advance. */
+            int posted_recv = 0;
             for (int i = 0; i < QPS_MAX_DEPTH; i++) {
-                RdmaReceive(peer->NodeID, mm + peer->NodeID * 4096, 0);
+                if (RdmaReceive(peer->NodeID, mm + peer->NodeID * 4096, 0)) {
+                    posted_recv += 1;
+                }
             }
+            Debug::notifyInfo("Client %d pre-post recv on control QP: %d/%d", peer->NodeID, posted_recv, QPS_MAX_DEPTH);
 
             Debug::debugItem("Accepted to Node%d", peer->NodeID);
         }
@@ -839,11 +930,11 @@ bool RdmaSocket::RdmaSend(uint16_t NodeID, uint64_t SourceBuffer, uint64_t Buffe
     wr.wr_id      = 0;
     wr.sg_list    = &sg;
     wr.num_sge    = 1;
-    wr.imm_data   = (uint32_t)MyNodeID;
+    wr.imm_data   = htonl((uint32_t)MyNodeID);
     wr.opcode     = IBV_WR_SEND_WITH_IMM;
     wr.send_flags = IBV_SEND_SIGNALED;
 
-    if (ibv_post_send(peer->qp[0], &wr, &wrBad)) {
+    if (ibv_post_send(peer->qp[CONTROL_QP_INDEX], &wr, &wrBad)) {
         Debug::notifyError("Send with RDMA_SEND failed.");
         return false;
     }
@@ -882,7 +973,7 @@ bool RdmaSocket::_RdmaBatchSend(uint16_t NodeID, uint64_t SourceBuffer, uint64_t
         //send_wr[w_i].send_flags |= IBV_SEND_INLINE;
         peer->counter += 1;
     }
-    if (ibv_post_send(peer->qp[0], &send_wr[0], &wrBad)) {
+    if (ibv_post_send(peer->qp[CONTROL_QP_INDEX], &send_wr[0], &wrBad)) {
         Debug::notifyError("Send with RDMA_SEND failed.");
         return false;
     }
@@ -910,9 +1001,14 @@ bool RdmaSocket::RdmaReceive(uint16_t NodeID, uint64_t SourceBuffer, uint64_t Bu
      
     memset(&wr, 0, sizeof(wr));
     wr.wr_id      = 0;
-    wr.sg_list    = &sg;
-    wr.num_sge    = 1;
-    ret = ibv_post_recv(peer->qp[0], &wr, &wrBad);
+    if (BufferSize == 0) {
+        wr.sg_list = NULL;
+        wr.num_sge = 0;
+    } else {
+        wr.sg_list = &sg;
+        wr.num_sge = 1;
+    }
+    ret = ibv_post_recv(peer->qp[CONTROL_QP_INDEX], &wr, &wrBad);
     if (ret) {
         Debug::notifyError("Receive with RDMA_RECV failed, ret = %d.", ret);
         return false;
@@ -938,11 +1034,16 @@ bool RdmaSocket::_RdmaBatchReceive(uint16_t NodeID, uint64_t SourceBuffer, uint6
         sgl[w_i].length = BufferSize;
         sgl[w_i].lkey = mr->lkey;
         sgl[w_i].addr = (uintptr_t)SourceBuffer + w_i * 4096;
-        recv_wr[w_i].sg_list = &sgl[w_i];
-        recv_wr[w_i].num_sge = 1;
+        if (BufferSize == 0) {
+            recv_wr[w_i].sg_list = NULL;
+            recv_wr[w_i].num_sge = 0;
+        } else {
+            recv_wr[w_i].sg_list = &sgl[w_i];
+            recv_wr[w_i].num_sge = 1;
+        }
         recv_wr[w_i].next = (w_i == BatchSize - 1) ? NULL : &recv_wr[w_i + 1];
     }
-    ret = ibv_post_recv(peer->qp[0], &recv_wr[0], &bad_recv_wr);
+    ret = ibv_post_recv(peer->qp[CONTROL_QP_INDEX], &recv_wr[0], &bad_recv_wr);
     if (ret) {
 	Debug::notifyError("Receive with RDMA_RECV failed, ret = %d.", ret);
 	return false;
@@ -1026,28 +1127,9 @@ bool RdmaSocket::_RdmaBatchRead(uint16_t NodeID, uint64_t SourceBuffer, uint64_t
 }
 
 bool RdmaSocket::RemoteRead(uint64_t bufferSend, uint16_t NodeID, uint64_t bufferReceive, uint64_t size) {
-    int shipSize;
-    if (size < 4 * 1024 * 1024) {
-        /* Small size read, no need to use multithread to transfer. */
-        InboundHamal(0, bufferSend, NodeID, bufferReceive, size);
-        return true;
-    } else {
-        /* Each thread transfer one part, 4-KB Aligned. */
-        TransferSignal = 0;
-        shipSize = size / WORKER_NUMBER;
-        shipSize = shipSize >> 12 << 12;
-        for (int i = 0; i < WORKER_NUMBER; i++) {
-            TransferTask *task = new TransferTask();
-            task->OpType = false;
-            task->size = (i < 3) ? shipSize : (size - 3 * shipSize);
-            task->bufferReceive = bufferReceive + i * shipSize;
-            task->NodeID = NodeID;
-            task->bufferSend = bufferSend + i * shipSize;
-            queue[i].PushPolling(task);
-        }
-        while (TransferSignal != WORKER_NUMBER);
-        return true;
-    }
+    int data_qp = PickDataQpBySize(size);
+    std::lock_guard<std::mutex> lock(dataPathMutex[data_qp - DATA_QP_SMALL_INDEX]);
+    return InboundHamal(data_qp, bufferSend, NodeID, bufferReceive, size);
 }
 
 bool RdmaSocket::DataTransferWorker(int id) {
@@ -1066,7 +1148,8 @@ bool RdmaSocket::DataTransferWorker(int id) {
 
 bool RdmaSocket::InboundHamal(int TaskID, uint64_t bufferSend, uint16_t NodeID, uint64_t bufferReceive, uint64_t size) {
     uint64_t SendPoolSize = 1024 * 1024;
-    uint64_t SendPoolAddr = mm + 4 * 1024 + TaskID * 1024 * 1024;
+    int pool_idx = (TaskID == DATA_QP_LARGE_INDEX) ? 1 : 0;
+    uint64_t SendPoolAddr = mm + 4 * 1024 + pool_idx * 1024 * 1024;
     uint64_t TotalSizeSend = 0; 
     uint64_t SendSize;
     struct ibv_wc wc;
@@ -1080,7 +1163,7 @@ bool RdmaSocket::InboundHamal(int TaskID, uint64_t bufferSend, uint16_t NodeID, 
         //                SendSize, 
         //                1);
         gettimeofday(&start, NULL);
-        if (!RdmaRead(NodeID, SendPoolAddr, bufferReceive + TotalSizeSend, SendSize, TaskID + 1)) {
+        if (!RdmaRead(NodeID, SendPoolAddr, bufferReceive + TotalSizeSend, SendSize, TaskID)) {
             Debug::notifyError("InboundHamal: RdmaRead failed (NodeID=%d, TaskID=%d, size=%lu)", NodeID, TaskID, SendSize);
             return false;
         }
@@ -1091,11 +1174,10 @@ bool RdmaSocket::InboundHamal(int TaskID, uint64_t bufferSend, uint16_t NodeID, 
         memcpy((void *)(bufferSend + TotalSizeSend), (void *)SendPoolAddr, SendSize);
         gettimeofday(&end, NULL);
         diff = 1000000 * (end.tv_sec - start.tv_sec) + end.tv_usec - start.tv_usec;
-        ReadSize[TaskID] += SendSize;
-        ReadTimeCost[TaskID] += diff;
+        ReadSize[pool_idx] += SendSize;
+        ReadTimeCost[pool_idx] += diff;
         TotalSizeSend += SendSize;
     }
-    __sync_fetch_and_add( &TransferSignal, 1 );
     return true;
 }
 
@@ -1125,7 +1207,7 @@ bool RdmaSocket::RdmaWrite(uint16_t NodeID, uint64_t SourceBuffer, uint64_t DesB
         wr.opcode     = IBV_WR_RDMA_WRITE;
     } else {
         wr.opcode     = IBV_WR_RDMA_WRITE_WITH_IMM;
-        wr.imm_data   = imm;
+        wr.imm_data   = htonl(imm);
     }
     wr.send_flags = IBV_SEND_SIGNALED;
     wr.wr.rdma.remote_addr = DesBuffer + peer->RegisteredMemory;
@@ -1140,33 +1222,15 @@ bool RdmaSocket::RdmaWrite(uint16_t NodeID, uint64_t SourceBuffer, uint64_t DesB
 }
 
 bool RdmaSocket::RemoteWrite(uint64_t bufferSend, uint16_t NodeID, uint64_t bufferReceive, uint64_t size) {
-    int shipSize;
-    if (size < 4 * 1024 * 1024) {
-        /* Small size write, no need to use multithread to transfer. */
-        OutboundHamal(0, bufferSend, NodeID, bufferReceive, size);
-        return true;
-    }  else {
-        /* Each thread transfer one part, 4-KB Aligned. */
-        TransferSignal = 0;
-        shipSize = size / WORKER_NUMBER;
-        shipSize = shipSize >> 12 << 12;
-        for (int i = 0; i < WORKER_NUMBER; i++) {
-            TransferTask *task = new TransferTask();
-            task->OpType = true;
-            task->size = (i < 3) ? shipSize : (size - 3 * shipSize);
-            task->bufferReceive = bufferReceive + i * shipSize;
-            task->NodeID = NodeID;
-            task->bufferSend = bufferSend + i * shipSize;
-            queue[i].PushPolling(task);
-        }
-        while (TransferSignal != WORKER_NUMBER);
-        return true;
-    }
+    int data_qp = PickDataQpBySize(size);
+    std::lock_guard<std::mutex> lock(dataPathMutex[data_qp - DATA_QP_SMALL_INDEX]);
+    return OutboundHamal(data_qp, bufferSend, NodeID, bufferReceive, size);
 }
 
 bool RdmaSocket::OutboundHamal(int TaskID, uint64_t bufferSend, uint16_t NodeID, uint64_t bufferReceive, uint64_t size) {
     uint64_t SendPoolSize = 1024 * 1024;
-    uint64_t SendPoolAddr = mm + 4 * 1024 + TaskID * 1024 * 1024;
+    int pool_idx = (TaskID == DATA_QP_LARGE_INDEX) ? 1 : 0;
+    uint64_t SendPoolAddr = mm + 4 * 1024 + pool_idx * 1024 * 1024;
     uint64_t TotalSizeSend = 0; 
     uint64_t SendSize;
     struct ibv_wc wc;
@@ -1184,7 +1248,7 @@ bool RdmaSocket::OutboundHamal(int TaskID, uint64_t bufferSend, uint16_t NodeID,
         //                SendSize, 
         //                (uint32_t)-1,
         //                1);
-        if (!RdmaWrite(NodeID, SendPoolAddr, bufferReceive + TotalSizeSend, SendSize, (uint32_t)-1, TaskID + 1)) {
+        if (!RdmaWrite(NodeID, SendPoolAddr, bufferReceive + TotalSizeSend, SendSize, (uint32_t)-1, TaskID)) {
             Debug::notifyError("OutboundHamal: RdmaWrite failed (NodeID=%d, TaskID=%d, size=%lu)", NodeID, TaskID, SendSize);
             return false;
         }
@@ -1199,13 +1263,13 @@ bool RdmaSocket::OutboundHamal(int TaskID, uint64_t bufferSend, uint16_t NodeID,
         // }
         gettimeofday(&end,NULL);
         diff = 1000000 * (end.tv_sec - start.tv_sec) + end.tv_usec - start.tv_usec;
-        WriteSize[TaskID] += SendSize;
-        WriteTimeCost[TaskID] += diff;
+        WriteSize[pool_idx] += SendSize;
+        WriteTimeCost[pool_idx] += diff;
         /* RdmaWrite Testing. */
         if (WriteTest) {
             gettimeofday(&start,NULL);
             for (int i = 0; i < 10; i ++) {
-                if (!RdmaWrite(NodeID, SendPoolAddr, bufferReceive, 1024 * 1024, (uint32_t)-1, TaskID + 1)) {
+                if (!RdmaWrite(NodeID, SendPoolAddr, bufferReceive, 1024 * 1024, (uint32_t)-1, TaskID)) {
                     Debug::notifyError("OutboundHamal: RdmaWrite failed during WriteTest");
                     return false;
                 }
@@ -1222,7 +1286,6 @@ bool RdmaSocket::OutboundHamal(int TaskID, uint64_t bufferSend, uint16_t NodeID,
         Debug::debugItem("Source Addr = %lx, Des Addr = %lx, Size = %d", SendPoolAddr, bufferReceive + TotalSizeSend, SendSize);
         TotalSizeSend += SendSize;
     }
-    __sync_fetch_and_add( &TransferSignal, 1 );
     return true;
 }
 
@@ -1263,7 +1326,7 @@ bool RdmaSocket::_RdmaBatchWrite(uint16_t NodeID, uint64_t SourceBuffer, uint64_
         send_wr[w_i].wr_id      = 0;
         
         send_wr[w_i].send_flags = 0;
-        send_wr[w_i].send_flags = (peer->counter & SIGNAL_BATCH) == 0 ? IBV_SEND_SIGNALED : 0;
+            send_wr[w_i].send_flags = (peer->counter & SIGNAL_BATCH) == 0 ? IBV_SEND_SIGNALED : 0;
         
         //send_wr[w_i].send_flags |= IBV_SEND_INLINE;
         send_wr[w_i].wr.rdma.remote_addr = DesBuffer + peer->RegisteredMemory + w_i * 4096;
@@ -1272,7 +1335,7 @@ bool RdmaSocket::_RdmaBatchWrite(uint16_t NodeID, uint64_t SourceBuffer, uint64_
         peer->counter += 1;
     }
 
-    if (ibv_post_send(peer->qp[0], &send_wr[0], &wrBad)) {
+    if (ibv_post_send(peer->qp[CONTROL_QP_INDEX], &send_wr[0], &wrBad)) {
         Debug::notifyError("Send with RDMA_WRITE(WITH_IMM) failed.");
         printf("%s\n", strerror(errno));
         return false;
@@ -1416,7 +1479,7 @@ int RdmaSocket::PollOnce(int cqPtr, int PollNumber, struct ibv_wc *wc) {
         return 0;
     } else if (count < 0) {
 	Debug::notifyError("Failure occurred when reading work completions, ret = %d", count);
-	return 0;
+	return -1;
     }
     if (wc->status != IBV_WC_SUCCESS) {
 	Debug::notifyError("Failed status %s (%d) for wr_id %d",

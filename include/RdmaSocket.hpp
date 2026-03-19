@@ -33,7 +33,12 @@
 #define QPS_MAX_DEPTH 128
 #define SIGNAL_BATCH  31
 #define WORKER_NUMBER 2
-#define QP_NUMBER 	  (1 + WORKER_NUMBER)
+#define CONTROL_QP_INDEX 0
+#define DATA_QP_SMALL_INDEX 1
+#define DATA_QP_LARGE_INDEX 2
+#define DATA_QP_COUNT 2
+#define DATA_QP_SPLIT_SIZE (10 * 1024)
+#define QP_NUMBER (1 + DATA_QP_COUNT)
 
 /* Important information of node-to-node connection */
 typedef struct {
@@ -97,9 +102,11 @@ private:
 	int                     listenSock;
 	uint8_t					Mode;			/* RC-0, UC-1, UD-2 */
 	int 					ServerCount;	/* The total number of servers */
+	uint32_t                srmAppThreads;
 	Queue<TransferTask *>   queue[WORKER_NUMBER];/* Used for Data transfer. */
 	uint16_t TransferSignal;				/* Used to notify compeletion of data transfer. */
 	thread 					worker[WORKER_NUMBER];
+	std::mutex              dataPathMutex[DATA_QP_COUNT];
 
 	/* Performance Checker. */
 	uint64_t WriteSize[WORKER_NUMBER];
@@ -110,9 +117,11 @@ private:
 
 	bool CreateResources();
 	bool CreateQueuePair(PeerSockData *peer, int MaxWr);
+	bool CreateSrmDataQueuePair(PeerSockData *peer, int offset);
 	bool ModifyQPtoInit(struct ibv_qp *qp);
 	bool ModifyQPtoRTR(struct ibv_qp *qp, uint32_t remote_qpn, uint16_t dlid, uint8_t *dgid);
 	bool ModifyQPtoRTS(struct ibv_qp *qp);
+	int PickDataQpBySize(uint64_t size) const;
 	bool ConnectQueuePair(PeerSockData *peer);
 	int DataSyncwithSocket(int sock, int size, char *LocalData, char *RemoteData);
 	bool ResourcesDestroy();
@@ -122,7 +131,7 @@ private:
 	bool DataTransferWorker(int id);
 public:
 	struct ibv_mr			*mr;			/* Memory registration handler */
-	RdmaSocket(int _cqNum, uint64_t _mm, uint64_t _mmSize, Configuration* _conf, bool isServer, uint8_t Mode);
+	RdmaSocket(int _cqNum, uint64_t _mm, uint64_t _mmSize, Configuration* _conf, bool isServer, uint8_t Mode, uint32_t srmAppThreads = 17);
 	~RdmaSocket();
 	/*
 	 * Request a graceful shutdown. This is intended to unblock polling/wait loops

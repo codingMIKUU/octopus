@@ -17,7 +17,7 @@ private:
 public:
 	uint64_t mm;
 	RPCClient(Configuration *conf, RdmaSocket *socket, MemoryManager *mem, uint64_t mm);
-	RPCClient();
+	RPCClient(uint32_t srmAppThreads = 17);
 	~RPCClient();
 	RdmaSocket* getRdmaSocketInstance();
 	Configuration* getConfInstance();

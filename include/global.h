@@ -9,6 +9,7 @@
 #include <sys/syscall.h>
 #include <unistd.h>
 #include "common.hpp"
+#include <infiniband/verbs.h>
 
 using namespace std;
 
@@ -21,7 +22,7 @@ static inline uint32_t octopus_gettid_u32() {
 }
 
 #define CLIENT_MESSAGE_SIZE 4096
-#define MAX_CLIENT_NUMBER   1024
+#define MAX_CLIENT_NUMBER SRM_KERN_MAX_USER_THREADS
 #define SERVER_MASSAGE_SIZE CLIENT_MESSAGE_SIZE
 #define SERVER_MASSAGE_NUM 8
 #define METADATA_SIZE (1024 * 1024 * 1024)

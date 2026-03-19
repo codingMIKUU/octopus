@@ -7,12 +7,12 @@ RPCClient::RPCClient(Configuration *_conf, RdmaSocket *_socket, MemoryManager *_
 	taskID  = 1;
 }
 
-RPCClient::RPCClient() {
+RPCClient::RPCClient(uint32_t srmAppThreads) {
 	isServer = false;
 	taskID = 1;
 	mm = (uint64_t)malloc(sizeof(char) * (1024 * 4 + 1024 * 1024 * 4));
 	conf = new Configuration();
-	socket = new RdmaSocket(1, mm, (1024 * 4 + 1024 * 1024 * 4), conf, false, 0);
+	socket = new RdmaSocket(1, mm, (1024 * 4 + 1024 * 1024 * 4), conf, false, 0, srmAppThreads);
 	socket->RdmaConnect();
 }
 
@@ -39,6 +39,8 @@ bool RPCClient::RdmaCall(uint16_t DesNodeID, char *bufferSend, uint64_t lengthSe
 	uint64_t sendBuffer, receiveBuffer, remoteRecvBuffer;
 	uint16_t offset = 0;
 	uint32_t imm = (uint32_t)socket->getNodeID();
+	static thread_local uint64_t rpc_call_idx = 0;
+	rpc_call_idx++;
 	// struct  timeval startt, endd;
 	// unsigned long diff, tempCount = 0;
 	GeneralSendBuffer *send = (GeneralSendBuffer*)bufferSend;
@@ -48,7 +50,7 @@ bool RPCClient::RdmaCall(uint16_t DesNodeID, char *bufferSend, uint64_t lengthSe
 	send->sizeReceiveBuffer = lengthReceive;
 	if (isServer) {
 		offset = mem->getServerSendAddress(DesNodeID, &sendBuffer);
-		// printf("offset = %d\n", offset);
+		printf("offset = %d\n", offset);
 		receiveBuffer = mem->getServerRecvAddress(socket->getNodeID(), offset);
 		remoteRecvBuffer = receiveBuffer - mm;
 	} else {
@@ -65,6 +67,15 @@ bool RPCClient::RdmaCall(uint16_t DesNodeID, char *bufferSend, uint64_t lengthSe
 	asm volatile ("sfence\n" : : );
 	temp = (uint32_t)offset;
 	imm = imm + (temp << 16);
+	if (imm == 0) {
+		Debug::notifyError("RdmaCall[%lu]: local node id is 0, IMM is 0, server will not get RECV event. request msg=%d dst=%u",
+			rpc_call_idx, (int)send->message, DesNodeID);
+		return false;
+	}
+	if (rpc_call_idx <= 8 || (rpc_call_idx % 1000 == 0)) {
+		Debug::notifyInfo("RdmaCall[%lu]: local_node=%u imm=0x%x offset=%u",
+			rpc_call_idx, (unsigned)socket->getNodeID(), imm, (unsigned)offset);
+	}
 	Debug::debugItem("sendBuffer = %lx, receiveBuffer = %lx, remoteRecvBuffer = %lx, ReceiveSize = %d", 
 		sendBuffer, receiveBuffer, remoteRecvBuffer, lengthReceive);
 	if (send->message == MESSAGE_DISCONNECT
@@ -78,12 +89,39 @@ bool RPCClient::RdmaCall(uint16_t DesNodeID, char *bufferSend, uint64_t lengthSe
 		Debug::notifyError("RdmaCall: failed to send request via RDMA to node %d", DesNodeID);
 		return false;
 	}
+	{
+		struct ibv_wc send_wc;
+		int poll_ret = socket->PollCompletion(DesNodeID, 1, &send_wc);
+		if (poll_ret < 0) {
+			Debug::notifyError("RdmaCall[%lu]: request send completion failed msg=%d dst=%u",
+				rpc_call_idx, (int)send->message, DesNodeID);
+			return false;
+		}
+		if (rpc_call_idx <= 8 || (rpc_call_idx % 1000 == 0)) {
+			Debug::notifyInfo("RdmaCall[%lu]: send completion ok msg=%d dst=%u opcode=%d wr_id=%llu",
+				rpc_call_idx,
+				(int)send->message,
+				DesNodeID,
+				(int)send_wc.opcode,
+				(unsigned long long)send_wc.wr_id);
+		}
+	}
 	if (isServer) {
 		while (recv->message == MESSAGE_INVALID || recv->message != MESSAGE_RESPONSE)
 			;
 	} else {
-		// gettimeofday(&startt,NULL);
+		struct timespec wait_start, wait_now;
+		clock_gettime(CLOCK_MONOTONIC, &wait_start);
+		double last_report_s = 0.0;
 		while (recv->message != MESSAGE_RESPONSE) {
+			clock_gettime(CLOCK_MONOTONIC, &wait_now);
+			double waited = (wait_now.tv_sec - wait_start.tv_sec) +
+				(wait_now.tv_nsec - wait_start.tv_nsec) / 1e9;
+			if (waited - last_report_s >= 1.0) {
+				Debug::notifyInfo("RdmaCall[%lu]: waiting response msg=%d dst=%u waited=%.2fs recv_msg=%d",
+					rpc_call_idx, (int)send->message, DesNodeID, waited, (int)recv->message);
+				last_report_s = waited;
+			}
 			;
 			/* gettimeofday(&endd,NULL);
 			diff = 1000000 * (endd.tv_sec - startt.tv_sec) + endd.tv_usec - startt.tv_usec;
@@ -97,6 +135,10 @@ bool RPCClient::RdmaCall(uint16_t DesNodeID, char *bufferSend, uint64_t lengthSe
 				diff = 0;
 			}*/
 		}
+	}
+	if (rpc_call_idx <= 8 || (rpc_call_idx % 1000 == 0)) {
+		Debug::notifyInfo("RdmaCall[%lu]: response arrived msg=%d dst=%u", rpc_call_idx,
+			(int)send->message, DesNodeID);
 	}
 	if (send->message == MESSAGE_EXTENTWRITE) {
 		ExtentWriteReceiveBuffer *wr = (ExtentWriteReceiveBuffer *)receiveBuffer;

@@ -59,6 +59,7 @@ set(CMAKE_MAKEFILE_PRODUCTS
 
 # Dependency information for all targets:
 set(CMAKE_DEPEND_INFO_FILES
+  "CMakeFiles/srmtput.dir/DependInfo.cmake"
   "CMakeFiles/nrfstest.dir/DependInfo.cmake"
   "CMakeFiles/mpitest.dir/DependInfo.cmake"
   "CMakeFiles/mpibw.dir/DependInfo.cmake"

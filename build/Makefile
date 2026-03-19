@@ -111,6 +111,19 @@ depend:
 .PHONY : depend
 
 #=============================================================================
+# Target rules for targets named srmtput
+
+# Build rule for target.
+srmtput: cmake_check_build_system
+	$(MAKE) -f CMakeFiles/Makefile2 srmtput
+.PHONY : srmtput
+
+# fast build rule for target.
+srmtput/fast:
+	$(MAKE) -f CMakeFiles/srmtput.dir/build.make CMakeFiles/srmtput.dir/build
+.PHONY : srmtput/fast
+
+#=============================================================================
 # Target rules for targets named nrfstest
 
 # Build rule for target.
@@ -902,6 +915,33 @@ src/test/nrfstest.cpp.s:
 	$(MAKE) -f CMakeFiles/nrfstest.dir/build.make CMakeFiles/nrfstest.dir/src/test/nrfstest.cpp.s
 .PHONY : src/test/nrfstest.cpp.s
 
+src/test/srmtput.o: src/test/srmtput.cpp.o
+
+.PHONY : src/test/srmtput.o
+
+# target to build an object file
+src/test/srmtput.cpp.o:
+	$(MAKE) -f CMakeFiles/srmtput.dir/build.make CMakeFiles/srmtput.dir/src/test/srmtput.cpp.o
+.PHONY : src/test/srmtput.cpp.o
+
+src/test/srmtput.i: src/test/srmtput.cpp.i
+
+.PHONY : src/test/srmtput.i
+
+# target to preprocess a source file
+src/test/srmtput.cpp.i:
+	$(MAKE) -f CMakeFiles/srmtput.dir/build.make CMakeFiles/srmtput.dir/src/test/srmtput.cpp.i
+.PHONY : src/test/srmtput.cpp.i
+
+src/test/srmtput.s: src/test/srmtput.cpp.s
+
+.PHONY : src/test/srmtput.s
+
+# target to generate assembly for a file
+src/test/srmtput.cpp.s:
+	$(MAKE) -f CMakeFiles/srmtput.dir/build.make CMakeFiles/srmtput.dir/src/test/srmtput.cpp.s
+.PHONY : src/test/srmtput.cpp.s
+
 src/tools/debug.o: src/tools/debug.cpp.o
 
 .PHONY : src/tools/debug.o
@@ -941,6 +981,7 @@ help:
 	@echo "... all (the default if no target is provided)"
 	@echo "... clean"
 	@echo "... depend"
+	@echo "... srmtput"
 	@echo "... nrfstest"
 	@echo "... mpitest"
 	@echo "... edit_cache"
@@ -1018,6 +1059,9 @@ help:
 	@echo "... src/test/nrfstest.o"
 	@echo "... src/test/nrfstest.i"
 	@echo "... src/test/nrfstest.s"
+	@echo "... src/test/srmtput.o"
+	@echo "... src/test/srmtput.i"
+	@echo "... src/test/srmtput.s"
 	@echo "... src/tools/debug.o"
 	@echo "... src/tools/debug.i"
 	@echo "... src/tools/debug.s"
