@@ -20,18 +20,6 @@ unordered_map
 string
 -
 
-../include/RPCClient.hpp
-thread
--
-RdmaSocket.hpp
-../include/RdmaSocket.hpp
-Configuration.hpp
-../include/Configuration.hpp
-mempool.hpp
-../include/mempool.hpp
-global.h
-../include/global.h
-
 ../include/RdmaSocket.hpp
 infiniband/verbs.h
 -
@@ -70,14 +58,6 @@ debug.hpp
 global.h
 ../include/global.h
 
-../include/TxManager.hpp
-stdint.h
--
-mutex
--
-string.h
--
-
 ../include/common.hpp
 stdint.h
 -
@@ -111,30 +91,6 @@ common.hpp
 ../include/common.hpp
 infiniband/verbs.h
 -
-
-../include/mempool.hpp
-unordered_map
--
-string.h
--
-stdint.h
--
-stdlib.h
--
-sys/ipc.h
--
-sys/shm.h
--
-debug.hpp
--
-global.h
-../include/global.h
-
-/root/zxm/octopus/src/net/RPCClient.cpp
-RPCClient.hpp
-/root/zxm/octopus/src/net/RPCClient.hpp
-TxManager.hpp
-/root/zxm/octopus/src/net/TxManager.hpp
 
 /root/zxm/octopus/src/net/RdmaSocket.cpp
 RdmaSocket.hpp

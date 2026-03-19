@@ -89,23 +89,23 @@ bool RPCClient::RdmaCall(uint16_t DesNodeID, char *bufferSend, uint64_t lengthSe
 		Debug::notifyError("RdmaCall: failed to send request via RDMA to node %d", DesNodeID);
 		return false;
 	}
-	{
-		struct ibv_wc send_wc;
-		int poll_ret = socket->PollCompletion(DesNodeID, 1, &send_wc);
-		if (poll_ret < 0) {
-			Debug::notifyError("RdmaCall[%lu]: request send completion failed msg=%d dst=%u",
-				rpc_call_idx, (int)send->message, DesNodeID);
-			return false;
-		}
-		if (rpc_call_idx <= 8 || (rpc_call_idx % 1000 == 0)) {
-			Debug::notifyInfo("RdmaCall[%lu]: send completion ok msg=%d dst=%u opcode=%d wr_id=%llu",
-				rpc_call_idx,
-				(int)send->message,
-				DesNodeID,
-				(int)send_wc.opcode,
-				(unsigned long long)send_wc.wr_id);
-		}
-	}
+	// {
+	// 	struct ibv_wc send_wc;
+	// 	int poll_ret = socket->PollCompletion(DesNodeID, 1, &send_wc);
+	// 	if (poll_ret < 0) {
+	// 		Debug::notifyError("RdmaCall[%lu]: request send completion failed msg=%d dst=%u",
+	// 			rpc_call_idx, (int)send->message, DesNodeID);
+	// 		return false;
+	// 	}
+	// 	if (rpc_call_idx <= 8 || (rpc_call_idx % 1000 == 0)) {
+	// 		Debug::notifyInfo("RdmaCall[%lu]: send completion ok msg=%d dst=%u opcode=%d wr_id=%llu",
+	// 			rpc_call_idx,
+	// 			(int)send->message,
+	// 			DesNodeID,
+	// 			(int)send_wc.opcode,
+	// 			(unsigned long long)send_wc.wr_id);
+	// 	}
+	// }
 	if (isServer) {
 		while (recv->message == MESSAGE_INVALID || recv->message != MESSAGE_RESPONSE)
 			;

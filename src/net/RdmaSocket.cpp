@@ -1252,10 +1252,14 @@ bool RdmaSocket::OutboundHamal(int TaskID, uint64_t bufferSend, uint16_t NodeID,
             Debug::notifyError("OutboundHamal: RdmaWrite failed (NodeID=%d, TaskID=%d, size=%lu)", NodeID, TaskID, SendSize);
             return false;
         }
-        if (PollCompletion(NodeID, 1, &wc) < 0) {
-            Debug::notifyError("OutboundHamal: PollCompletion failed (NodeID=%d, TaskID=%d)", NodeID, TaskID);
-            return false;
-        }
+        /* Shared CQ: drain completions until we get one from our target QP. */
+        uint32_t expect_qpn = peers[NodeID]->qp[TaskID]->qp_num;
+        do {
+            if (PollCompletion(NodeID, 1, &wc) < 0) {
+                Debug::notifyError("OutboundHamal: PollCompletion failed (NodeID=%d, TaskID=%d)", NodeID, TaskID);
+                return false;
+            }
+        } while (wc.qp_num != expect_qpn);
         // if (SendSize > 32 * 1024) {
         //     /* Wait Until write finish, May help. */
         //     RdmaRead(NodeID, SendPoolAddr, bufferReceive + TotalSizeSend, 1);

@@ -105,20 +105,16 @@ void RPCServer::RequestPoller(int id) {
 			Debug::debugItem("Path = %s, size = %x, offset = %x", send->path, send->size, send->offset);
 		}*/
 		return;
-	} else if (wc[0].opcode == IBV_WC_RECV_RDMA_WITH_IMM ||
-			   (wc[0].opcode == IBV_WC_RECV && (wc[0].wc_flags & IBV_WC_WITH_IMM))) {
-		uint32_t imm = ntohl(wc[0].imm_data);
-		Debug::notifyInfo("RequestPoller[%d]: RECV imm opcode=%d flags=0x%x raw=0x%x host=0x%x",
-			id, (int)wc[0].opcode, (unsigned)wc[0].wc_flags, wc[0].imm_data, imm);
-		NodeID = imm >> 20;
+	} else if (wc[0].opcode == IBV_WC_RECV_RDMA_WITH_IMM) {
+		NodeID = wc[0].imm_data >> 20;
 		if (NodeID == 0XFFF) {
 			/* Unlock request, process it directly. */
 			// uint64_t hashAddress = wc[0].imm_data & 0x000FFFFF;
 			// fs->unlockWriteHashItem(0, 0, hashAddress);
 			return;
 		}
-		NodeID = (uint16_t)(imm << 16 >> 16);
-		offset = (uint16_t)(imm >> 16);
+		NodeID = (uint16_t)(wc[0].imm_data << 16 >> 16);
+		offset = (uint16_t)(wc[0].imm_data >> 16);
 		Debug::debugItem("NodeID = %d, offset = %d", NodeID, offset);
 		count += 1;
 		if (NodeID > 0 && NodeID <= ServerCount) {
@@ -221,9 +217,10 @@ void RPCServer::ProcessRequest(GeneralSendBuffer *send, uint16_t NodeID, uint16_
     		socket->RdmaRead(NodeID, mem->getDataAddress(), 2 * 4096, bufferSend->size, 1); // FIX ME.
     		while (*value == 0);
     	}
-	Debug::debugItem("Copy Reply Data, size = %d.", size);
-    	memcpy((void *)send, receiveBuffer, size);
-	Debug::debugItem("Select Buffer.");
+		
+		Debug::debugItem("Copy Reply Data, size = %d.", size);
+			memcpy((void *)send, receiveBuffer, size);
+		Debug::debugItem("Select Buffer.");
     	if (NodeID > 0 && NodeID <= ServerCount) {
 			/* Recv Message From Other Server. */
 			bufferRecv = bufferRecv - mm;
