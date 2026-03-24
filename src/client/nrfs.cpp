@@ -12,14 +12,18 @@ using namespace std;
 mutex key_m;
 uint64_t key;
 atomic<bool> isConnected;
-RPCClient *client;
-uint64_t DmfsDataOffset;
+thread_local RPCClient *client = nullptr;
+thread_local uint64_t DmfsDataOffset = 0;
 
 struct  timeval start1, end1;
 uint64_t diff;
 uint64_t WriteTime1 = 0, WriteTime2 = 0, WriteTime3 = 0, WriteTime4 = 0, ReadTime1 = 0, ReadTime2 = 0, ReadTime3 = 0, ReadTime4 = 0;
 uint16_t get_node_id_by_path(char* path)
 {
+	if (client == nullptr) {
+		Debug::notifyError("NRFS client is not connected in this thread");
+		return 0;
+	}
 	UniqueHash hashUnique;
 	HashTable::getUniqueHash(path, strlen(path), &hashUnique);
 	return ((hashUnique.value[3] % client->getConfInstance()->getServerCount()) + 1);
@@ -28,6 +32,10 @@ uint16_t get_node_id_by_path(char* path)
 bool sendMessage(uint16_t node_id, void* sendBuffer, long unsigned int sendLength,
 								   void* recvBuffer, long unsigned int recvLength)
 {
+	if (client == nullptr) {
+		Debug::notifyError("sendMessage failed: NRFS client is not connected in this thread");
+		return false;
+	}
 	Debug::debugItem("sendMessage: dst node id: %d", node_id);
 	/* one request per time */
 	return client->RdmaCall(node_id, (char*)sendBuffer, (uint64_t)sendLength,
@@ -138,10 +146,18 @@ bool getNameFromPath(const char *path, char *name) { /* Assume path is valid. */
 nrfs nrfsConnect(const char* host, int port, int size)
 {
 	Debug::debugTitle("nrfsConnect");
-    client = new RPCClient();
+	(void)host;
+	(void)size;
+	uint32_t srm_app_threads = (port > 0) ? static_cast<uint32_t>(port) : 17;
+	if (client != nullptr) {
+		delete client;
+		client = nullptr;
+	}
+    client = new RPCClient(srm_app_threads);
     DmfsDataOffset =  CLIENT_MESSAGE_SIZE * MAX_CLIENT_NUMBER;
 	DmfsDataOffset += SERVER_MASSAGE_SIZE * SERVER_MASSAGE_NUM * client->getConfInstance()->getServerCount();
     DmfsDataOffset += METADATA_SIZE;
+    isConnected.store(true);
     printf("FileMetaSize = %ld, DirMetaSize = %ld\n", sizeof(FileMeta), sizeof(DirectoryMeta));
     usleep(100000);
 	return (nrfs)0;
@@ -157,6 +173,10 @@ nrfs nrfsConnect(const char* host, int port, int size)
 int nrfsDisconnect(nrfs fs)
 {
 	Debug::debugTitle("nrfsDisconnect");
+	(void)fs;
+	if (client == nullptr) {
+		return 0;
+	}
 	GeneralSendBuffer sendBuffer;
 	GeneralReceiveBuffer receiveBuffer;
 	sendBuffer.message = MESSAGE_DISCONNECT;
@@ -171,6 +191,9 @@ int nrfsDisconnect(nrfs fs)
 	// 	WriteTime1, WriteTime2, WriteTime3, WriteTime4);
 	// Debug::notifyInfo("ReadTime1 =  %d, ReadTime2  = %d, ReadTime3 = %d, ReadTime4 = %d\n", 
 	// 	ReadTime1, ReadTime2, ReadTime3, ReadTime4);
+	delete client;
+	client = nullptr;
+	DmfsDataOffset = 0;
 	return 0;
 }
 
@@ -453,6 +476,8 @@ int nrfsWrite(nrfs fs, nrfsFile _file, const void* buffer, uint64_t size, uint64
 {
 	Debug::debugTitle("nrfsWrite");
 	Debug::debugItem("Write size: %lx, offset: %lx", size, offset);
+	static thread_local uint64_t write_call_idx = 0;
+	write_call_idx++;
 	
 	gettimeofday(&start1, NULL);
 
@@ -475,10 +500,20 @@ int nrfsWrite(nrfs fs, nrfsFile _file, const void* buffer, uint64_t size, uint64
 	WriteTime1 += diff;
 
 	gettimeofday(&start1, NULL);
+	if (write_call_idx <= 8 || (write_call_idx % 1000 == 0)) {
+		Debug::notifyInfo("nrfsWrite[%lu]: sendMessage start node=%u size=%lu offset=%lu",
+			write_call_idx, node_id, size, offset);
+	}
 	if (!sendMessage(node_id, &bufferExtentWriteSend, sizeof(ExtentWriteSendBuffer), 
 					&bufferExtentWriteReceive, sizeof(ExtentWriteReceiveBuffer))) {
 		Debug::notifyError("nrfsWrite: sendMessage failed, node_id=%d", node_id);
 		return -1;
+	}
+	if (write_call_idx <= 8 || (write_call_idx % 1000 == 0)) {
+		Debug::notifyInfo("nrfsWrite[%lu]: sendMessage done result=%d fpi_len=%u",
+			write_call_idx,
+			bufferExtentWriteReceive.result ? 1 : 0,
+			bufferExtentWriteReceive.fpi.len);
 	}
 	gettimeofday(&end1, NULL);
 	diff = 1000000 * (end1.tv_sec - start1.tv_sec) + end1.tv_usec - start1.tv_usec;
@@ -507,6 +542,11 @@ int nrfsWrite(nrfs fs, nrfsFile _file, const void* buffer, uint64_t size, uint64
 			}
 			else
 			{
+				if (write_call_idx <= 8 || (write_call_idx % 1000 == 0)) {
+					Debug::notifyInfo("nrfsWrite[%lu]: RemoteWrite tuple=%d node=%u remote_off=%lu size=%lu",
+						write_call_idx, i, fpi.tuple[i].node_id,
+						fpi.tuple[i].offset + DmfsDataOffset, fpi.tuple[i].size);
+				}
 				if (!client->getRdmaSocketInstance()->RemoteWrite((uint64_t)((char*)buffer + length_copied), 
 					              fpi.tuple[i].node_id,
                                   fpi.tuple[i].offset + DmfsDataOffset,

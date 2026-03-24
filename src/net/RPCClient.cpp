@@ -12,7 +12,7 @@ RPCClient::RPCClient(uint32_t srmAppThreads) {
 	taskID = 1;
 	mm = (uint64_t)malloc(sizeof(char) * (1024 * 4 + 1024 * 1024 * 4));
 	conf = new Configuration();
-	socket = new RdmaSocket(1, mm, (1024 * 4 + 1024 * 1024 * 4), conf, false, 0, srmAppThreads);
+	socket = new RdmaSocket(2, mm, (1024 * 4 + 1024 * 1024 * 4), conf, false, 0, srmAppThreads);
 	socket->RdmaConnect();
 }
 
@@ -73,7 +73,7 @@ bool RPCClient::RdmaCall(uint16_t DesNodeID, char *bufferSend, uint64_t lengthSe
 		return false;
 	}
 	if (rpc_call_idx <= 8 || (rpc_call_idx % 1000 == 0)) {
-		Debug::notifyInfo("RdmaCall[%lu]: local_node=%u imm=0x%x offset=%u",
+		Debug::debugItem("RdmaCall[%lu]: local_node=%u imm=0x%x offset=%u",
 			rpc_call_idx, (unsigned)socket->getNodeID(), imm, (unsigned)offset);
 	}
 	Debug::debugItem("sendBuffer = %lx, receiveBuffer = %lx, remoteRecvBuffer = %lx, ReceiveSize = %d", 
@@ -137,7 +137,7 @@ bool RPCClient::RdmaCall(uint16_t DesNodeID, char *bufferSend, uint64_t lengthSe
 		}
 	}
 	if (rpc_call_idx <= 8 || (rpc_call_idx % 1000 == 0)) {
-		Debug::notifyInfo("RdmaCall[%lu]: response arrived msg=%d dst=%u", rpc_call_idx,
+		Debug::debugItem("RdmaCall[%lu]: response arrived msg=%d dst=%u", rpc_call_idx,
 			(int)send->message, DesNodeID);
 	}
 	if (send->message == MESSAGE_EXTENTWRITE) {

@@ -107,6 +107,74 @@ int RdmaSocket::PickDataQpBySize(uint64_t size) const {
     return DATA_QP_SMALL_INDEX;
 }
 
+int RdmaSocket::GetControlCqIndex(int peerIndex) const {
+    return 2 * peerIndex - 1;
+}
+
+int RdmaSocket::GetDataCqIndex(int peerIndex) const {
+    return 2 * peerIndex;
+}
+
+bool RdmaSocket::BindPeerCqs(PeerSockData *peer) {
+    if (peer == NULL) {
+        Debug::notifyError("BindPeerCqs: peer is null");
+        return false;
+    }
+
+    if (isServer && peer->NodeID > 0 && peer->NodeID <= ServerCount) {
+        peer->control_cq_index = 0;
+        peer->data_cq_index = 0;
+        peer->control_cq = cq[0];
+        peer->data_cq = cq[0];
+        return true;
+    }
+
+    int control_idx = GetControlCqIndex(peer->NodeID);
+    int data_idx = GetDataCqIndex(peer->NodeID);
+    if (control_idx >= 0 && control_idx < cqNum && data_idx >= 0 && data_idx < cqNum) {
+        peer->control_cq_index = control_idx;
+        peer->data_cq_index = data_idx;
+        peer->control_cq = cq[control_idx];
+        peer->data_cq = cq[data_idx];
+        return true;
+    }
+
+    int begin = isServer ? 1 : 0;
+    if (begin >= cqNum) {
+        Debug::notifyError("BindPeerCqs: no available CQ, cqNum=%d", cqNum);
+        return false;
+    }
+    if (cqPtr < begin) {
+        cqPtr = begin;
+    }
+    if (((cqPtr - begin) & 1) != 0) {
+        cqPtr += 1;
+    }
+    if (cqPtr + 1 >= cqNum) {
+        cqPtr = begin;
+    }
+    if (cqPtr + 1 >= cqNum) {
+        Debug::notifyError("BindPeerCqs: insufficient CQ pairs, cqNum=%d", cqNum);
+        return false;
+    }
+
+    peer->control_cq_index = cqPtr;
+    peer->data_cq_index = cqPtr + 1;
+    peer->control_cq = cq[peer->control_cq_index];
+    peer->data_cq = cq[peer->data_cq_index];
+
+    Debug::notifyInfo("BindPeerCqs: NodeID=%u fallback control_cq=%d data_cq=%d",
+                      (unsigned)peer->NodeID,
+                      peer->control_cq_index,
+                      peer->data_cq_index);
+
+    cqPtr += 2;
+    if (cqPtr + 1 >= cqNum) {
+        cqPtr = begin;
+    }
+    return true;
+}
+
 RdmaSocket::RdmaSocket(int _cqNum, uint64_t _mm, uint64_t _mmSize, Configuration* _conf, bool _isServer, uint8_t _Mode, uint32_t _srmAppThreads) :
 DeviceName(NULL), Port(1), ServerPort(5678), GidIndex(0), 
 isRunning(true), isServer(_isServer), cqNum(_cqNum), cqPtr(0), 
@@ -353,12 +421,11 @@ bool RdmaSocket::CreateQueuePair(PeerSockData *peer, int offset) {
         attr.qp_type = IBV_QPT_UC;
     }
     attr.sq_sig_all = 0;
-
     if (isServer && peer->NodeID > 0 && peer->NodeID <= ServerCount) {
         /* Server interconnect: always use CQ 0. */
         attr.send_cq = cq[0];
         attr.recv_cq = cq[0];
-        peer->cq = cq[0];
+        peer->control_cq = cq[0];
     } else if (isServer) {
         /* Connection between server and client. */
         if (offset == 0) {
@@ -369,25 +436,22 @@ bool RdmaSocket::CreateQueuePair(PeerSockData *peer, int offset) {
         }
         attr.send_cq = cq[cqPtr];
         attr.recv_cq = cq[cqPtr];
-        peer->cq = cq[cqPtr];
+        peer->control_cq = cq[cqPtr];
+        peer->data_cq = cq[cqPtr];
     } else {
-        /* Client: one CQ per peer, and all QPs of that peer share it. */
         if (offset == CONTROL_QP_INDEX) {
-            int next = cqPtr;
-            cqPtr += 1;
-            if (cqPtr >= cqNum) {
-                cqPtr = 0;
+            if (!BindPeerCqs(peer)) {
+                return false;
             }
-            attr.send_cq = cq[next];
-            attr.recv_cq = cq[next];
-            peer->cq = cq[next];
+            attr.send_cq = peer->control_cq;
+            attr.recv_cq = peer->control_cq;
         } else {
-            attr.send_cq = peer->cq;
-            attr.recv_cq = peer->cq;
+            attr.send_cq = peer->data_cq;
+            attr.recv_cq = peer->data_cq;
         }
     }
 
-    if (isServer || offset == CONTROL_QP_INDEX) {
+    if (!USE_SRM || !isServer || offset == CONTROL_QP_INDEX) {
         attr.cap.max_send_wr = QPS_MAX_DEPTH;
         attr.cap.max_recv_wr = QPS_MAX_DEPTH;
         attr.cap.max_send_sge = 1;
@@ -411,8 +475,8 @@ bool RdmaSocket::CreateSrmDataQueuePair(PeerSockData *peer, int offset) {
 
     attr_ex.qp_type = (Mode == 1) ? IBV_QPT_UC : IBV_QPT_RC;
     attr_ex.sq_sig_all = 0;
-    attr_ex.send_cq = peer->cq;
-    attr_ex.recv_cq = peer->cq;
+    attr_ex.send_cq = peer->data_cq;
+    attr_ex.recv_cq = peer->data_cq;
     attr_ex.pd = pd;
     attr_ex.comp_mask = IBV_QP_INIT_ATTR_PD;
 
@@ -426,7 +490,7 @@ bool RdmaSocket::CreateSrmDataQueuePair(PeerSockData *peer, int offset) {
         attr_ex.sender_side = 1;
         attr_ex.rnode_num = 1;
         attr_ex.srm_app_threads = (srmAppThreads > 0) ? srmAppThreads : 1;
-        attr_ex.srm_xrc_qp_num_per_srm = 1;//Server端就一个
+        attr_ex.srm_xrc_qp_num_per_srm = 8;//Server端就一个
     }
 
     peer->qp[offset] = ibv_create_qp_ex(ctx, &attr_ex);
@@ -958,7 +1022,7 @@ bool RdmaSocket::_RdmaBatchSend(uint16_t NodeID, uint64_t SourceBuffer, uint64_t
     int w_i;
     for (w_i = 0; w_i < BatchSize; w_i++) {
         if ((peer->counter & SIGNAL_BATCH) == 0 && peer->counter > 0 && !isServer) {
-            PollCompletion(NodeID, 1, &wc);
+            PollCompletion(NodeID, 1, &wc, false);
         }
         sgl[w_i].addr   = (uintptr_t)SourceBuffer + w_i * 4096;
         sgl[w_i].length = BufferSize;
@@ -1103,7 +1167,7 @@ bool RdmaSocket::_RdmaBatchRead(uint16_t NodeID, uint64_t SourceBuffer, uint64_t
     int w_i;
     for (w_i = 0; w_i < BatchSize; w_i++) {
         if ((peer->counter & SIGNAL_BATCH) == 0 && peer->counter > 0 && !isServer) {
-            PollCompletion(NodeID, 1, &wc);
+            PollCompletion(NodeID, 1, &wc, false);
         }
         sgl[w_i].addr   = (uintptr_t)SourceBuffer + w_i * 8;
         sgl[w_i].length = BufferSize;
@@ -1167,7 +1231,7 @@ bool RdmaSocket::InboundHamal(int TaskID, uint64_t bufferSend, uint16_t NodeID, 
             Debug::notifyError("InboundHamal: RdmaRead failed (NodeID=%d, TaskID=%d, size=%lu)", NodeID, TaskID, SendSize);
             return false;
         }
-        if (PollCompletion(NodeID, 1, &wc) < 0) {
+        if (!isServer && PollCompletion(NodeID, 1, &wc, true) < 0) {
             Debug::notifyError("InboundHamal: PollCompletion failed (NodeID=%d, TaskID=%d)", NodeID, TaskID);
             return false;
         }
@@ -1180,7 +1244,6 @@ bool RdmaSocket::InboundHamal(int TaskID, uint64_t bufferSend, uint16_t NodeID, 
     }
     return true;
 }
-
 bool RdmaSocket::RdmaWrite(uint16_t NodeID, uint64_t SourceBuffer, uint64_t DesBuffer, uint64_t BufferSize, uint32_t imm, int TaskID) {
     if (NodeID >= 1000) {
         Debug::notifyError("RdmaWrite: invalid NodeID %d", NodeID);
@@ -1254,12 +1317,13 @@ bool RdmaSocket::OutboundHamal(int TaskID, uint64_t bufferSend, uint16_t NodeID,
         }
         /* Shared CQ: drain completions until we get one from our target QP. */
         uint32_t expect_qpn = peers[NodeID]->qp[TaskID]->qp_num;
-        do {
-            if (PollCompletion(NodeID, 1, &wc) < 0) {
-                Debug::notifyError("OutboundHamal: PollCompletion failed (NodeID=%d, TaskID=%d)", NodeID, TaskID);
-                return false;
-            }
-        } while (wc.qp_num != expect_qpn);
+        if (!isServer && PollCompletion(NodeID, 1, &wc, true) < 0) {
+            Debug::notifyError("OutboundHamal: PollCompletion failed (NodeID=%d, TaskID=%d)", NodeID, TaskID);
+            return false;
+        }
+        if(!isServer && wc.qp_num != expect_qpn){
+            Debug::notifyError("OutboundHamal: got completion from unexpected QP (expect %u, got %u)", expect_qpn, wc.qp_num);
+        }
         // if (SendSize > 32 * 1024) {
         //     /* Wait Until write finish, May help. */
         //     RdmaRead(NodeID, SendPoolAddr, bufferReceive + TotalSizeSend, 1);
@@ -1277,7 +1341,7 @@ bool RdmaSocket::OutboundHamal(int TaskID, uint64_t bufferSend, uint16_t NodeID,
                     Debug::notifyError("OutboundHamal: RdmaWrite failed during WriteTest");
                     return false;
                 }
-                if (PollCompletion(NodeID, 1, &wc) < 0) {
+                if (PollCompletion(NodeID, 1, &wc, true) < 0) {
                     Debug::notifyError("OutboundHamal: PollCompletion failed during WriteTest");
                     return false;
                 }
@@ -1313,7 +1377,10 @@ bool RdmaSocket::_RdmaBatchWrite(uint16_t NodeID, uint64_t SourceBuffer, uint64_
         // if(!isServer)
         //     octopus_log_wqe(MyNodeID, NodeID, BufferSize);
         if ((peer->counter & SIGNAL_BATCH) == 0 && peer->counter > 0 && !isServer) {
-            PollCompletion(NodeID, 1, &wc);
+            PollCompletion(NodeID, 1, &wc, false);
+            if(wc.qp_num != peer->qp[0]->qp_num) {
+                Debug::notifyError("BatchWrite: got completion from unexpected QP (expect %d, got %d)", peer->qp[0]->qp_num, wc.qp_num);
+            }
         }
         sgl[w_i].addr   = (uintptr_t)SourceBuffer + w_i * 4096;
         sgl[w_i].length = BufferSize;
@@ -1412,12 +1479,19 @@ bool RdmaSocket::RdmaCompareAndSwap(uint16_t NodeID, uint64_t SourceBuffer, uint
     return true;
 }
 
-int RdmaSocket::PollCompletion(uint16_t NodeID, int PollNumber, struct ibv_wc *wc) {
+int RdmaSocket::PollCompletion(uint16_t NodeID, int PollNumber, struct ibv_wc *wc, bool isDataPath) {
     if (!isRunning) {
         return -1;
     }
-    if (NodeID >= 1000 || peers[NodeID] == NULL || peers[NodeID]->cq == NULL) {
-        Debug::notifyError("PollCompletion: invalid peer/cq (NodeID=%d)", NodeID);
+    if (NodeID >= 1000 || peers[NodeID] == NULL) {
+        Debug::notifyError("PollCompletion: invalid peer (NodeID=%d)", NodeID);
+        return -1;
+    }
+    struct ibv_cq *target_cq = isDataPath ? peers[NodeID]->data_cq : peers[NodeID]->control_cq;
+    if (target_cq == NULL) {
+        Debug::notifyError("PollCompletion: invalid %s cq (NodeID=%d)",
+                           isDataPath ? "data" : "control",
+                           NodeID);
         return -1;
     }
     int count = 0;
@@ -1426,9 +1500,12 @@ int RdmaSocket::PollCompletion(uint16_t NodeID, int PollNumber, struct ibv_wc *w
         if (!isRunning) {
             return -1;
         }
-        int rc = ibv_poll_cq(peers[NodeID]->cq, 1, wc);
+        int rc = ibv_poll_cq(target_cq, 1, wc);
         if (rc < 0) {
-            Debug::notifyError("PollCompletion: ibv_poll_cq failed (NodeID=%d, rc=%d)", NodeID, rc);
+            Debug::notifyError("PollCompletion: ibv_poll_cq failed (NodeID=%d, path=%s, rc=%d)",
+                               NodeID,
+                               isDataPath ? "data" : "control",
+                               rc);
             return -1;
         }
         count += rc;
@@ -1440,6 +1517,11 @@ int RdmaSocket::PollCompletion(uint16_t NodeID, int PollNumber, struct ibv_wc *w
             ibv_wc_status_str(wc->status),
             wc->status, (int)wc->wr_id);
         return -1;
+    }
+
+    if(USE_SRM && isDataPath){
+        Debug::debugItem("SRM: Add total recv cqes for Node%d, count = %d", NodeID, count);
+        ibv_srm_add_tot_recv_cqes(peers[NodeID]->qp[1],count);
     }
     Debug::debugItem("Find New Completion Message");
     return count;

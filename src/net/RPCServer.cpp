@@ -10,7 +10,7 @@ RPCServer::RPCServer(int _cqSize) :cqSize(_cqSize) {
 	Debug::notifyInfo("DmfsBaseAddress = %lx, DmfsTotalSize = %lx",
 		mem->getDmfsBaseAddress(), mem->getDmfsTotalSize());
 	ServerCount = conf->getServerCount();
-	socket = new RdmaSocket(cqSize, mm, mem->getDmfsTotalSize(), conf, true, 0);
+	socket = new RdmaSocket(cqSize, mm, mem->getDmfsTotalSize(), conf, true, 0,1);
 	client = new RPCClient(conf, socket, mem, (uint64_t)mm);
 	tx = new TxManager(mem->getLocalLogAddress(), mem->getDistributedLogAddress());
 	socket->RdmaListen();
@@ -84,6 +84,7 @@ void RPCServer::Worker(int id) {
 }
 
 void RPCServer::RequestPoller(int id) {
+	static int data_cnt = 0;
 	struct ibv_wc wc[1];
 	uint16_t NodeID;
 	uint16_t offset;
@@ -161,8 +162,40 @@ void RPCServer::RequestPoller(int id) {
 		}
 		
 	} else {
-		Debug::notifyInfo("RequestPoller[%d]: unexpected wc opcode=%d flags=0x%x",
-			id, (int)wc[0].opcode, (unsigned)wc[0].wc_flags);
+		if(USE_SRM){
+			bool handled_data_qp = false;
+			for (uint16_t peer_id = 1; peer_id < 1000 && !handled_data_qp; ++peer_id) {
+				PeerSockData *peer = socket->getPeerInformation(peer_id);
+				if (peer == NULL)
+					continue;
+
+				for (int data_qp = DATA_QP_SMALL_INDEX;
+					data_qp <= DATA_QP_LARGE_INDEX;
+					++data_qp) {
+					if (peer->qp[data_qp] == NULL)
+						continue;
+					if (wc[0].qp_num != peer->qp[data_qp]->qp_num)
+						continue;
+
+					if(ibv_srm_add_tot_recv_cqes(peer->qp[data_qp], ret)){
+						printf("RequestPoller[%d]: ibv_srm_add_tot_recv_cqes failed (peer_id=%d, data_qp=%d, ret=%d)\n",
+							id, peer_id, data_qp, ret);
+					}
+					printf("RequestPoller[%d]: handle data qp completion (peer_id=%d, data_qp=%d, ret=%d, data_cqe_count=%d)\n",
+						id, peer_id, data_qp, ret, ++data_cnt);
+					handled_data_qp = true;
+					break;
+				}
+			}
+			if(!handled_data_qp)
+				Debug::debugItem("RequestPoller[%d]: unexpected wc opcode=%d flags=0x%x, qp_num:%d",
+					id, (int)wc[0].opcode, (unsigned)wc[0].wc_flags, wc[0].qp_num);
+		}
+
+		// if (!handled_data_qp) {
+		// 	Debug::notifyInfo("RequestPoller[%d]: unexpected wc opcode=%d flags=0x%x",
+		// 		id, (int)wc[0].opcode, (unsigned)wc[0].wc_flags);
+		// }
 	}
 }
 
@@ -178,11 +211,28 @@ void RPCServer::ProcessQueueRequest() {
 
 void RPCServer::ProcessRequest(GeneralSendBuffer *send, uint16_t NodeID, uint16_t offset) {
 	char receiveBuffer[CLIENT_MESSAGE_SIZE];
+	memset(receiveBuffer, 0, sizeof(receiveBuffer));
 	uint64_t bufferRecv = (uint64_t)send;
 	GeneralReceiveBuffer *recv = (GeneralReceiveBuffer*)receiveBuffer;
+	recv->sourceNodeID = socket->getNodeID();
 	recv->taskID = send->taskID;
+	recv->sizeReceiveBuffer = 0;
 	recv->message = MESSAGE_RESPONSE;
+	recv->result = true;
 	uint64_t size = send->sizeReceiveBuffer;
+	if (send->message < MESSAGE_ADDMETATODIRECTORY || send->message >= MESSAGE_INVALID) {
+		Debug::notifyError("ProcessRequest: invalid message=%d from NodeID=%u offset=%u, reply with failure",
+			(int)send->message, (unsigned)NodeID, (unsigned)offset);
+		recv->result = false;
+		size = sizeof(GeneralReceiveBuffer);
+		//exit(-1);
+	} else if (size == 0 || size > CLIENT_MESSAGE_SIZE) {
+		Debug::notifyError("ProcessRequest: invalid reply size=%lu for message=%d from NodeID=%u offset=%u",
+			size, (int)send->message, (unsigned)NodeID, (unsigned)offset);
+		recv->result = false;
+		size = sizeof(GeneralReceiveBuffer);
+		//exit(-1);
+	}
 	if (send->message == MESSAGE_DISCONNECT) {
         //rdma->disconnect(send->sourceNodeID);
         return;
@@ -199,37 +249,49 @@ void RPCServer::ProcessRequest(GeneralSendBuffer *send, uint16_t NodeID, uint16_
     	// fs->unlockReadHashItem(bufferSend->key, NodeID, bufferSend->offset);
     	return;
 	} else {
-    	fs->parseMessage((char*)send, receiveBuffer);
-    	// fs->recursivereaddir("/", 0);
-	Debug::debugItem("Contract Receive Buffer, size = %d.", size);
-	size -= ContractReceiveBuffer(send, recv);
-    	if (send->message == MESSAGE_RAWREAD) {
-    		ExtentReadSendBuffer *bufferSend = (ExtentReadSendBuffer *)send;
-    		uint64_t *value = (uint64_t *)mem->getDataAddress();
-    		// printf("rawread size = %d\n", (int)bufferSend->size);
-    		*value = 1;
-    		socket->RdmaWrite(NodeID, mem->getDataAddress(), 2 * 4096, bufferSend->size, -1, 1);
-    	} else if (send->message == MESSAGE_RAWWRITE) {
-    		ExtentWriteSendBuffer *bufferSend = (ExtentWriteSendBuffer *)send;
-    		// printf("rawwrite size = %d\n", (int)bufferSend->size);
-    		uint64_t *value = (uint64_t *)mem->getDataAddress();
-    		*value = 0;
-    		socket->RdmaRead(NodeID, mem->getDataAddress(), 2 * 4096, bufferSend->size, 1); // FIX ME.
-    		while (*value == 0);
-    	}
-		
-		Debug::debugItem("Copy Reply Data, size = %d.", size);
-			memcpy((void *)send, receiveBuffer, size);
+		if (recv->result) {
+	    		fs->parseMessage((char*)send, receiveBuffer);
+	    		// fs->recursivereaddir("/", 0);
+			Debug::debugItem("Contract Receive Buffer, size = %lu.", size);
+			uint64_t contract_size = ContractReceiveBuffer(send, recv);
+			if (contract_size > size) {
+				Debug::notifyError("ProcessRequest: contract size overflow, size=%lu, contract=%lu, message=%d",
+					size, contract_size, (int)send->message);
+				size = sizeof(GeneralReceiveBuffer);
+			} else {
+				size -= contract_size;
+			}
+	    		if (send->message == MESSAGE_RAWREAD) {
+	    			ExtentReadSendBuffer *bufferSend = (ExtentReadSendBuffer *)send;
+				int data_qp = (bufferSend->size >= DATA_QP_SPLIT_SIZE) ?
+					DATA_QP_LARGE_INDEX : DATA_QP_SMALL_INDEX;
+	    			uint64_t *value = (uint64_t *)mem->getDataAddress();
+	    			// printf("rawread size = %d\n", (int)bufferSend->size);
+	    			*value = 1;
+				socket->RdmaWrite(NodeID, mem->getDataAddress(), 2 * 4096, bufferSend->size, -1, data_qp);
+	    		} else if (send->message == MESSAGE_RAWWRITE) {
+	    			ExtentWriteSendBuffer *bufferSend = (ExtentWriteSendBuffer *)send;
+	    			// printf("rawwrite size = %d\n", (int)bufferSend->size);
+				if (!socket->RemoteRead(mem->getDataAddress(), NodeID, 2 * 4096, bufferSend->size)) {
+					recv->result = false;
+					while(1);
+					//exit(-1);
+				}
+	    		}
+		}
+
+		Debug::debugItem("Copy Reply Data, size = %lu.", size);
+		memcpy((void *)send, receiveBuffer, size);
 		Debug::debugItem("Select Buffer.");
-    	if (NodeID > 0 && NodeID <= ServerCount) {
+		if (NodeID > 0 && NodeID <= ServerCount) {
 			/* Recv Message From Other Server. */
 			bufferRecv = bufferRecv - mm;
 		} else if (NodeID > ServerCount) {
 			/* Recv Message From Client. */
 			bufferRecv = 0;
-		} 
+		}
 		Debug::debugItem("send = %lx, recv = %lx", send, bufferRecv);
-    		socket->_RdmaBatchWrite(NodeID, (uint64_t)send, bufferRecv, size, 0, 1);
+		socket->_RdmaBatchWrite(NodeID, (uint64_t)send, bufferRecv, size, 0, 1);
 		// socket->_RdmaBatchReceive(NodeID, mm, 0, 2);
 		socket->RdmaReceive(NodeID, mm + NodeID * 4096, 0);
 		// printf("process end\n");

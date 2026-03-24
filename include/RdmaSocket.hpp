@@ -30,8 +30,8 @@
 * Important global information.
 */
 #define MAX_POST_LIST 24
-#define QPS_MAX_DEPTH 128
-#define SIGNAL_BATCH  31
+#define QPS_MAX_DEPTH 512
+#define SIGNAL_BATCH  1
 #define WORKER_NUMBER 2
 #define CONTROL_QP_INDEX 0
 #define DATA_QP_SMALL_INDEX 1
@@ -43,7 +43,10 @@
 /* Important information of node-to-node connection */
 typedef struct {
 	struct ibv_qp *qp[QP_NUMBER];
-	struct ibv_cq *cq;
+	struct ibv_cq *control_cq;
+	struct ibv_cq *data_cq;
+	int control_cq_index;
+	int data_cq_index;
 	uint32_t qpNum[QP_NUMBER];
 	uint64_t RegisteredMemory;
 	uint32_t rkey;
@@ -121,6 +124,9 @@ private:
 	bool ModifyQPtoInit(struct ibv_qp *qp);
 	bool ModifyQPtoRTR(struct ibv_qp *qp, uint32_t remote_qpn, uint16_t dlid, uint8_t *dgid);
 	bool ModifyQPtoRTS(struct ibv_qp *qp);
+	int GetControlCqIndex(int peerIndex) const;
+	int GetDataCqIndex(int peerIndex) const;
+	bool BindPeerCqs(PeerSockData *peer);
 	int PickDataQpBySize(uint64_t size) const;
 	bool ConnectQueuePair(PeerSockData *peer);
 	int DataSyncwithSocket(int sock, int size, char *LocalData, char *RemoteData);
@@ -143,7 +149,7 @@ public:
 	/* Called by client side to connect to each of server actively. */
 	void RdmaConnect();
 	/* Called to check completion of RDMA operations */
-	int PollCompletion(uint16_t NodeID, int PollNumber, struct ibv_wc *wc);
+	int PollCompletion(uint16_t NodeID, int PollNumber, struct ibv_wc *wc, bool isDataPath = false);
 	int PollWithCQ(int cqPtr, int PollNumber, struct ibv_wc *wc);
 	int PollOnce(int cqPtr, int PollNumber, struct ibv_wc *wc);
 	/* Used for synchronization based on socket communication */
