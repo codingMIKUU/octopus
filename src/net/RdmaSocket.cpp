@@ -9,6 +9,8 @@
 #include <stdio.h>
 #include <mutex>
 #include <unordered_set>
+#include <time.h>
+#include <unistd.h>
 
 static bool octopus_gid_all_zero(const union ibv_gid &gid) {
     for (int i = 0; i < 16; ++i) {
@@ -425,19 +427,37 @@ bool RdmaSocket::CreateQueuePair(PeerSockData *peer, int offset) {
         /* Server interconnect: always use CQ 0. */
         attr.send_cq = cq[0];
         attr.recv_cq = cq[0];
+        peer->control_cq_index = 0;
+        peer->data_cq_index = 0;
         peer->control_cq = cq[0];
+        peer->data_cq = cq[0];
     } else if (isServer) {
-        /* Connection between server and client. */
-        if (offset == 0) {
-            /* Each client will create two qps, we use same cq at server side. */
-            cqPtr += 1;
-            if (cqPtr >= cqNum)
-                cqPtr = 1;
+        /* Connection between server and client: control/data QPs use different per-worker CQs. */
+        int controlCqCount = (cqNum >= 2) ? (cqNum / 2) : 1;
+        if (offset == CONTROL_QP_INDEX) {
+            int workerCq = 0;
+            if (controlCqCount > 1) {
+                int span = controlCqCount - 1;
+                workerCq = 1 + (cqPtr % span);
+            }
+            peer->control_cq_index = workerCq;
+            peer->data_cq_index = workerCq + controlCqCount;
+            if (peer->data_cq_index >= cqNum) {
+                peer->data_cq_index = workerCq;
+            }
+            peer->control_cq = cq[peer->control_cq_index];
+            peer->data_cq = cq[peer->data_cq_index];
+            if (controlCqCount > 1) {
+                cqPtr = (cqPtr + 1) % (controlCqCount - 1);
+            }
         }
-        attr.send_cq = cq[cqPtr];
-        attr.recv_cq = cq[cqPtr];
-        peer->control_cq = cq[cqPtr];
-        peer->data_cq = cq[cqPtr];
+        if (offset == CONTROL_QP_INDEX) {
+            attr.send_cq = peer->control_cq;
+            attr.recv_cq = peer->control_cq;
+        } else {
+            attr.send_cq = peer->data_cq;
+            attr.recv_cq = peer->data_cq;
+        }
     } else {
         if (offset == CONTROL_QP_INDEX) {
             if (!BindPeerCqs(peer)) {
@@ -490,7 +510,7 @@ bool RdmaSocket::CreateSrmDataQueuePair(PeerSockData *peer, int offset) {
         attr_ex.sender_side = 1;
         attr_ex.rnode_num = 1;
         attr_ex.srm_app_threads = (srmAppThreads > 0) ? srmAppThreads : 1;
-        attr_ex.srm_xrc_qp_num_per_srm = 8;//Server端就一个
+        attr_ex.srm_xrc_qp_num_per_srm = 16;//Server端就一个
     }
 
     peer->qp[offset] = ibv_create_qp_ex(ctx, &attr_ex);
@@ -1147,6 +1167,57 @@ bool RdmaSocket::RdmaRead(uint16_t NodeID, uint64_t SourceBuffer, uint64_t DesBu
         Debug::notifyError("Send with RDMA_READ failed.");
         return false;
     }
+
+    if (isServer && TaskID >= DATA_QP_SMALL_INDEX && TaskID <= DATA_QP_LARGE_INDEX) {
+        const long timeout_ms = 2000;
+        const uint32_t expect_qpn = peer->qp[TaskID]->qp_num;
+        struct ibv_wc wc;
+        struct timespec start_ts, now_ts;
+        clock_gettime(CLOCK_MONOTONIC, &start_ts);
+        while (true) {
+            int rc = ibv_poll_cq(peer->data_cq, 1, &wc);
+            if (rc < 0) {
+                Debug::notifyError("RdmaRead: ibv_poll_cq failed (NodeID=%d, TaskID=%d, data_cq_index=%d, rc=%d)",
+                    NodeID, TaskID, peer->data_cq_index, rc);
+                return false;
+            }
+            if (rc == 0) {
+                clock_gettime(CLOCK_MONOTONIC, &now_ts);
+                long waited_ms = (now_ts.tv_sec - start_ts.tv_sec) * 1000L +
+                    (now_ts.tv_nsec - start_ts.tv_nsec) / 1000000L;
+                if (waited_ms >= timeout_ms) {
+                    Debug::notifyError("RdmaRead: data CQE timeout (NodeID=%d, TaskID=%d, data_cq_index=%d, data_cq=%p, qp=%p, expect_qpn=%u, waited_ms=%ld)",
+                        NodeID, TaskID, peer->data_cq_index, (void*)peer->data_cq,
+                        (void*)peer->qp[TaskID], expect_qpn, waited_ms);
+                    return false;
+                }
+                usleep(50);
+                continue;
+            }
+
+            if (wc.status != IBV_WC_SUCCESS) {
+                Debug::notifyError("RdmaRead: bad data CQE status=%s(%d), NodeID=%d, TaskID=%d, cq_index=%d, data_cq=%p, qp=%p, qp_num=%u, opcode=%d",
+                    ibv_wc_status_str(wc.status), wc.status, NodeID, TaskID,
+                    peer->data_cq_index, (void*)peer->data_cq,
+                    (void*)peer->qp[TaskID], wc.qp_num, (int)wc.opcode);
+                return false;
+            }
+
+            if (wc.qp_num != expect_qpn) {
+                Debug::notifyError("RdmaRead: got CQE from unexpected QP (NodeID=%d, TaskID=%d, cq_index=%d, expect_qpn=%u, got_qpn=%u, opcode=%d)",
+                    NodeID, TaskID, peer->data_cq_index, expect_qpn, wc.qp_num, (int)wc.opcode);
+                continue;
+            }
+            if (USE_SRM) {
+                if (ibv_srm_add_tot_recv_cqes(peer->qp[TaskID], 1)) {
+                    Debug::notifyError("RdmaRead: ibv_srm_add_tot_recv_cqes failed (NodeID=%d, TaskID=%d, qp_num=%u)",
+                        NodeID, TaskID, expect_qpn);
+                    return false;
+                }
+            }
+            break;
+        }
+    }
 	return true;
 }
 
@@ -1244,6 +1315,8 @@ bool RdmaSocket::InboundHamal(int TaskID, uint64_t bufferSend, uint16_t NodeID, 
     }
     return true;
 }
+
+static int cqe_cnt = 0;
 bool RdmaSocket::RdmaWrite(uint16_t NodeID, uint64_t SourceBuffer, uint64_t DesBuffer, uint64_t BufferSize, uint32_t imm, int TaskID) {
     if (NodeID >= 1000) {
         Debug::notifyError("RdmaWrite: invalid NodeID %d", NodeID);
@@ -1280,6 +1353,62 @@ bool RdmaSocket::RdmaWrite(uint16_t NodeID, uint64_t SourceBuffer, uint64_t DesB
         Debug::notifyError("Send with RDMA_WRITE(WITH_IMM) failed.");
         printf("%s\n", strerror(errno));
         return false;
+    }
+
+    if (isServer && TaskID >= DATA_QP_SMALL_INDEX && TaskID <= DATA_QP_LARGE_INDEX) {
+        const long timeout_ms = 2000;
+        const uint32_t expect_qpn = peer->qp[TaskID]->qp_num;
+        struct ibv_wc wc;
+        struct timespec start_ts, now_ts;
+        clock_gettime(CLOCK_MONOTONIC, &start_ts);
+        while (true) {
+            int rc = ibv_poll_cq(peer->data_cq, 1, &wc);
+            if (rc < 0) {
+                Debug::notifyError("RdmaWrite: ibv_poll_cq failed (NodeID=%d, TaskID=%d, data_cq_index=%d, data_cq=%p, qp=%p, expect_qpn=%u, rc=%d)",
+                    NodeID, TaskID, peer->data_cq_index, (void*)peer->data_cq,
+                    (void*)peer->qp[TaskID], expect_qpn, rc);
+                return false;
+            }
+            if (rc == 0) {
+                clock_gettime(CLOCK_MONOTONIC, &now_ts);
+                long waited_ms = (now_ts.tv_sec - start_ts.tv_sec) * 1000L +
+                    (now_ts.tv_nsec - start_ts.tv_nsec) / 1000000L;
+                if (waited_ms >= timeout_ms) {
+                    Debug::notifyError("RdmaWrite: data CQE timeout (NodeID=%d, TaskID=%d, data_cq_index=%d, data_cq=%p, qp=%p, expect_qpn=%u, waited_ms=%ld)",
+                        NodeID, TaskID, peer->data_cq_index, (void*)peer->data_cq,
+                        (void*)peer->qp[TaskID], expect_qpn, waited_ms);
+                    exit(-1);
+                    return false;
+                }
+                usleep(50);
+                continue;
+            }
+
+            if (wc.status != IBV_WC_SUCCESS) {
+                Debug::notifyError("RdmaWrite: bad data CQE status=%s(%d), NodeID=%d, TaskID=%d, cq_index=%d, data_cq=%p, qp=%p, qp_num=%u, opcode=%d",
+                    ibv_wc_status_str(wc.status), wc.status, NodeID, TaskID,
+                    peer->data_cq_index, (void*)peer->data_cq,
+                    (void*)peer->qp[TaskID], wc.qp_num, (int)wc.opcode);
+                return false;
+            }
+
+
+            if (wc.qp_num != expect_qpn) {
+                Debug::notifyError("RdmaWrite: got CQE from unexpected QP (NodeID=%d, TaskID=%d, cq_index=%d, data_cq=%p, qp=%p, expect_qpn=%u, got_qpn=%u, opcode=%d)",
+                    NodeID, TaskID, peer->data_cq_index, (void*)peer->data_cq,
+                    (void*)peer->qp[TaskID], expect_qpn, wc.qp_num, (int)wc.opcode);
+                continue;
+            }
+            Debug::debugItem("cqe_cnt = %d", ++cqe_cnt);
+            if (USE_SRM) {
+                if (ibv_srm_add_tot_recv_cqes(peer->qp[TaskID], 1)) {
+                    Debug::notifyError("RdmaWrite: ibv_srm_add_tot_recv_cqes failed (NodeID=%d, TaskID=%d, qp_num=%u)",
+                        NodeID, TaskID, expect_qpn);
+                    return false;
+                }
+            }
+            break;
+        }
     }
 	return true;
 }

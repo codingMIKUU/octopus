@@ -258,10 +258,6 @@ filesystem.hpp
 RPCServer.hpp
 /root/zxm/octopus/src/fs/RPCServer.hpp
 
-/root/zxm/octopus/src/fs/hashtable.cpp
-hashtable.hpp
-/root/zxm/octopus/src/fs/hashtable.hpp
-
 /root/zxm/octopus/src/fs/lock.cpp
 lock.h
 /root/zxm/octopus/src/fs/lock.h
@@ -271,12 +267,6 @@ RPCServer.hpp
 /root/zxm/octopus/src/fs/storage.cpp
 storage.hpp
 -
-
-/root/zxm/octopus/src/net/Configuration.cpp
-Configuration.hpp
-/root/zxm/octopus/src/net/Configuration.hpp
-debug.hpp
-/root/zxm/octopus/src/net/debug.hpp
 
 /root/zxm/octopus/src/net/RPCClient.cpp
 RPCClient.hpp
@@ -299,14 +289,14 @@ mutex
 -
 unordered_set
 -
+time.h
+-
+unistd.h
+-
 
 /root/zxm/octopus/src/net/mempool.cpp
 mempool.hpp
 /root/zxm/octopus/src/net/mempool.hpp
-
-/root/zxm/octopus/src/tools/debug.cpp
-debug.hpp
-/root/zxm/octopus/src/tools/debug.hpp
 
 /root/zxm/rdma-core/build/include/infiniband/ib_user_ioctl_verbs.h
 linux/types.h

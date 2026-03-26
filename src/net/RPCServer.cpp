@@ -10,7 +10,7 @@ RPCServer::RPCServer(int _cqSize) :cqSize(_cqSize) {
 	Debug::notifyInfo("DmfsBaseAddress = %lx, DmfsTotalSize = %lx",
 		mem->getDmfsBaseAddress(), mem->getDmfsTotalSize());
 	ServerCount = conf->getServerCount();
-	socket = new RdmaSocket(cqSize, mm, mem->getDmfsTotalSize(), conf, true, 0,1);
+	socket = new RdmaSocket(cqSize * 2, mm, mem->getDmfsTotalSize(), conf, true, 0,1);
 	client = new RPCClient(conf, socket, mem, (uint64_t)mm);
 	tx = new TxManager(mem->getLocalLogAddress(), mem->getDistributedLogAddress());
 	socket->RdmaListen();
@@ -178,17 +178,21 @@ void RPCServer::RequestPoller(int id) {
 						continue;
 
 					if(ibv_srm_add_tot_recv_cqes(peer->qp[data_qp], ret)){
-						printf("RequestPoller[%d]: ibv_srm_add_tot_recv_cqes failed (peer_id=%d, data_qp=%d, ret=%d)\n",
+						Debug::debugItem("RequestPoller[%d]: ibv_srm_add_tot_recv_cqes failed (peer_id=%d, data_qp=%d, ret=%d)",
 							id, peer_id, data_qp, ret);
 					}
-					printf("RequestPoller[%d]: handle data qp completion (peer_id=%d, data_qp=%d, ret=%d, data_cqe_count=%d)\n",
-						id, peer_id, data_qp, ret, ++data_cnt);
+					Debug::debugItem("RequestPoller[%d]: handle data qp completion (peer_id=%d, data_qp=%d, ret=%d, data_cqe_count=%d, wc_qpn=%u, peer_qpn=%u, data_cq_index=%d, data_cq=%p)",
+						id, peer_id, data_qp, ret, ++data_cnt,
+						(unsigned)wc[0].qp_num,
+						(unsigned)peer->qp[data_qp]->qp_num,
+						peer->data_cq_index,
+						(void*)peer->data_cq);
 					handled_data_qp = true;
 					break;
 				}
 			}
 			if(!handled_data_qp)
-				Debug::debugItem("RequestPoller[%d]: unexpected wc opcode=%d flags=0x%x, qp_num:%d",
+				Debug::debugItem("RequestPoller[%d]: unexpected wc opcode=%d flags=0x%x, qp_num:%d (no data-qp owner found)",
 					id, (int)wc[0].opcode, (unsigned)wc[0].wc_flags, wc[0].qp_num);
 		}
 
@@ -268,13 +272,18 @@ void RPCServer::ProcessRequest(GeneralSendBuffer *send, uint16_t NodeID, uint16_
 	    			uint64_t *value = (uint64_t *)mem->getDataAddress();
 	    			// printf("rawread size = %d\n", (int)bufferSend->size);
 	    			*value = 1;
-				socket->RdmaWrite(NodeID, mem->getDataAddress(), 2 * 4096, bufferSend->size, -1, data_qp);
+				if (!socket->RdmaWrite(NodeID, mem->getDataAddress(), 2 * 4096, bufferSend->size, -1, data_qp)) {
+					Debug::notifyError("ProcessRequest: MESSAGE_RAWREAD data write failed (NodeID=%u, size=%lu, data_qp=%d)",
+						(unsigned)NodeID, bufferSend->size, data_qp);
+					recv->result = false;
+				}
 	    		} else if (send->message == MESSAGE_RAWWRITE) {
 	    			ExtentWriteSendBuffer *bufferSend = (ExtentWriteSendBuffer *)send;
 	    			// printf("rawwrite size = %d\n", (int)bufferSend->size);
 				if (!socket->RemoteRead(mem->getDataAddress(), NodeID, 2 * 4096, bufferSend->size)) {
+					Debug::notifyError("ProcessRequest: MESSAGE_RAWWRITE data read failed (NodeID=%u, size=%lu)",
+						(unsigned)NodeID, bufferSend->size);
 					recv->result = false;
-					while(1);
 					//exit(-1);
 				}
 	    		}

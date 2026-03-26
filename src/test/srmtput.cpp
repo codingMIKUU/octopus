@@ -14,7 +14,7 @@
 #include <thread>
 #include <vector>
 
-static constexpr uint64_t kReportOpsThreshold = 1024ULL * 1024ULL;
+static constexpr uint64_t kReportOpsThreshold = 1024ULL ;
 
 struct ThreadStats {
     std::atomic<uint64_t> total_bytes;
@@ -98,7 +98,8 @@ static void worker_main(WorkerArg arg) {
             break;
         }
 
-        uint64_t offset = (op_index % arg.max_offsets) * arg.io_size;
+         uint64_t offset = (op_index % arg.max_offsets) * arg.io_size;
+        //uint64_t offset = 0;
         int ret;
         if (arg.use_raw) {
             ret = nrfsRawRead(fs, file, buf.data(), arg.io_size, offset);

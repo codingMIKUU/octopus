@@ -12,8 +12,8 @@
 
 /** Defninitions. **/
 #define MAX_FORMAT_LEN 255
-#define DEBUG true
-#define TITLE true
+#define DEBUG false
+#define TITLE false
 #define TIMER false
 #define CUR  false
 /** Classes. **/
