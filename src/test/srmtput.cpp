@@ -15,6 +15,18 @@
 #include <vector>
 
 static constexpr uint64_t kReportOpsThreshold = 1024ULL ;
+static constexpr int kThreadsPerShardDir = 32;
+
+static bool ensure_dir_exists(nrfs fs, const char* path) {
+    if (nrfsAccess(fs, path) == 0) {
+        return true;
+    }
+    if (nrfsCreateDirectory(fs, path) == 0) {
+        return true;
+    }
+    /* Handle create races: another thread may have created it first. */
+    return nrfsAccess(fs, path) == 0;
+}
 
 struct ThreadStats {
     std::atomic<uint64_t> total_bytes;
@@ -58,11 +70,35 @@ static void worker_main(WorkerArg arg) {
     }
 
     nrfs fs = nrfsConnect("default", arg.total_threads, 0);
-
+    arg.ready_threads->fetch_add(1, std::memory_order_acq_rel);
+    arg.connect_turn->store(arg.tid + 1, std::memory_order_release);
+    
+    while (!arg.start_gate->load(std::memory_order_acquire)) {
+        std::this_thread::yield();
+    }
     fprintf(stderr, "[srmtput][tid=%d] connect done\n", arg.tid);
 
-    char path[128];
-    snprintf(path, sizeof(path), "/fcscale_tput_file_%d", arg.tid);
+    char root_dir[64];
+    snprintf(root_dir, sizeof(root_dir), "/fcscale_tput");
+    if (!ensure_dir_exists(fs, root_dir)) {
+        fprintf(stderr, "[srmtput][tid=%d] create root dir failed: %s\n", arg.tid, root_dir);
+        arg.stats->errors.fetch_add(1, std::memory_order_relaxed);
+        nrfsDisconnect(fs);
+        return;
+    }
+
+    char shard_dir[96];
+    int shard_id = arg.tid / kThreadsPerShardDir;
+    snprintf(shard_dir, sizeof(shard_dir), "%s/shard_%d", root_dir, shard_id);
+    if (!ensure_dir_exists(fs, shard_dir)) {
+        fprintf(stderr, "[srmtput][tid=%d] create shard dir failed: %s\n", arg.tid, shard_dir);
+        arg.stats->errors.fetch_add(1, std::memory_order_relaxed);
+        nrfsDisconnect(fs);
+        return;
+    }
+
+    char path[160];
+    snprintf(path, sizeof(path), "%s/fcscale_tput_file_%d", shard_dir, arg.tid);
     fprintf(stderr, "[srmtput][tid=%d] opening file %s ...\n", arg.tid, path);
     nrfsFile file = nrfsOpenFile(fs, path, O_CREAT | O_RDWR);
     if (file == nullptr) {
@@ -75,12 +111,8 @@ static void worker_main(WorkerArg arg) {
     }
     fprintf(stderr, "[srmtput][tid=%d] open file ok\n", arg.tid);
 
-    arg.ready_threads->fetch_add(1, std::memory_order_acq_rel);
-    arg.connect_turn->store(arg.tid + 1, std::memory_order_release);
 
-    while (!arg.start_gate->load(std::memory_order_acquire)) {
-        std::this_thread::yield();
-    }
+
 
     std::vector<char> buf(arg.io_size, 'a');
     uint64_t op_index = 0;
@@ -98,8 +130,8 @@ static void worker_main(WorkerArg arg) {
             break;
         }
 
-         uint64_t offset = (op_index % arg.max_offsets) * arg.io_size;
-        //uint64_t offset = 0;
+        //uint64_t offset = (op_index % arg.max_offsets) * arg.io_size;
+        uint64_t offset = 0;
         int ret;
         if (arg.use_raw) {
             ret = nrfsRawRead(fs, file, buf.data(), arg.io_size, offset);

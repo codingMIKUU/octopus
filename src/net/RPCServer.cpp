@@ -1,4 +1,5 @@
 #include "RPCServer.hpp"
+#include <sys/time.h>
 // __thread struct  timeval startt, endd;
 RPCServer::RPCServer(int _cqSize) :cqSize(_cqSize) {
 	running.store(true);
@@ -10,10 +11,9 @@ RPCServer::RPCServer(int _cqSize) :cqSize(_cqSize) {
 	Debug::notifyInfo("DmfsBaseAddress = %lx, DmfsTotalSize = %lx",
 		mem->getDmfsBaseAddress(), mem->getDmfsTotalSize());
 	ServerCount = conf->getServerCount();
-	socket = new RdmaSocket(cqSize * 2, mm, mem->getDmfsTotalSize(), conf, true, 0,1);
+	socket = new RdmaSocket(cqSize * 2, mm, mem->getDmfsTotalSize(), conf, true, 0,cqSize-1);
 	client = new RPCClient(conf, socket, mem, (uint64_t)mm);
 	tx = new TxManager(mem->getLocalLogAddress(), mem->getDistributedLogAddress());
-	socket->RdmaListen();
 	fs = new FileSystem((char *)mem->getMetadataBaseAddress(),
               (char *)mem->getDataAddress(),
               1024 * 20,/* Constructor of file system. */
@@ -25,6 +25,7 @@ RPCServer::RPCServer(int _cqSize) :cqSize(_cqSize) {
 	wk = new thread[cqSize]();
 	for (int i = 0; i < cqSize; i++)
 		wk[i] = thread(&RPCServer::Worker, this, i);
+	socket->RdmaListen();
 }
 RPCServer::~RPCServer() {
 	Debug::notifyInfo("Stop RPCServer.");
@@ -84,12 +85,14 @@ void RPCServer::Worker(int id) {
 }
 
 void RPCServer::RequestPoller(int id) {
-	static int data_cnt = 0;
 	struct ibv_wc wc[1];
 	uint16_t NodeID;
 	uint16_t offset;
 	int ret = 0, count = 0;
 	uint64_t bufferRecv;
+	if (id > 0) {
+		socket->ProcessPendingConnectTask(id);
+	}
 	// unsigned long diff;
 	ret = socket->PollOnce(id, 1, wc);
 	if (ret <= 0) {
@@ -106,7 +109,13 @@ void RPCServer::RequestPoller(int id) {
 			Debug::debugItem("Path = %s, size = %x, offset = %x", send->path, send->size, send->offset);
 		}*/
 		return;
-	} else if (wc[0].opcode == IBV_WC_RECV_RDMA_WITH_IMM) {
+	}
+
+	if (id > 0) {
+		socket->NotifyWorkerSawCqe(id);
+	}
+
+	if (wc[0].opcode == IBV_WC_RECV_RDMA_WITH_IMM) {
 		NodeID = wc[0].imm_data >> 20;
 		if (NodeID == 0XFFF) {
 			/* Unlock request, process it directly. */
@@ -162,39 +171,39 @@ void RPCServer::RequestPoller(int id) {
 		}
 		
 	} else {
-		if(USE_SRM){
-			bool handled_data_qp = false;
-			for (uint16_t peer_id = 1; peer_id < 1000 && !handled_data_qp; ++peer_id) {
-				PeerSockData *peer = socket->getPeerInformation(peer_id);
-				if (peer == NULL)
-					continue;
+		// if(USE_SRM){
+		// 	bool handled_data_qp = false;
+		// 	for (uint16_t peer_id = 1; peer_id < 1000 && !handled_data_qp; ++peer_id) {
+		// 		PeerSockData *peer = socket->getPeerInformation(peer_id);
+		// 		if (peer == NULL)
+		// 			continue;
 
-				for (int data_qp = DATA_QP_SMALL_INDEX;
-					data_qp <= DATA_QP_LARGE_INDEX;
-					++data_qp) {
-					if (peer->qp[data_qp] == NULL)
-						continue;
-					if (wc[0].qp_num != peer->qp[data_qp]->qp_num)
-						continue;
+		// 		for (int data_qp = DATA_QP_SMALL_INDEX;
+		// 			data_qp <= DATA_QP_LARGE_INDEX;
+		// 			++data_qp) {
+		// 			if (peer->qp[data_qp] == NULL)
+		// 				continue;
+		// 			if (wc[0].qp_num != peer->qp[data_qp]->qp_num)
+		// 				continue;
 
-					if(ibv_srm_add_tot_recv_cqes(peer->qp[data_qp], ret)){
-						Debug::debugItem("RequestPoller[%d]: ibv_srm_add_tot_recv_cqes failed (peer_id=%d, data_qp=%d, ret=%d)",
-							id, peer_id, data_qp, ret);
-					}
-					Debug::debugItem("RequestPoller[%d]: handle data qp completion (peer_id=%d, data_qp=%d, ret=%d, data_cqe_count=%d, wc_qpn=%u, peer_qpn=%u, data_cq_index=%d, data_cq=%p)",
-						id, peer_id, data_qp, ret, ++data_cnt,
-						(unsigned)wc[0].qp_num,
-						(unsigned)peer->qp[data_qp]->qp_num,
-						peer->data_cq_index,
-						(void*)peer->data_cq);
-					handled_data_qp = true;
-					break;
-				}
-			}
-			if(!handled_data_qp)
-				Debug::debugItem("RequestPoller[%d]: unexpected wc opcode=%d flags=0x%x, qp_num:%d (no data-qp owner found)",
-					id, (int)wc[0].opcode, (unsigned)wc[0].wc_flags, wc[0].qp_num);
-		}
+		// 			if(ibv_srm_add_tot_recv_cqes(peer->qp[data_qp], ret)){
+		// 				Debug::debugItem("RequestPoller[%d]: ibv_srm_add_tot_recv_cqes failed (peer_id=%d, data_qp=%d, ret=%d)",
+		// 					id, peer_id, data_qp, ret);
+		// 			}
+		// 			Debug::debugItem("RequestPoller[%d]: handle data qp completion (peer_id=%d, data_qp=%d, ret=%d, data_cqe_count=%d, wc_qpn=%u, peer_qpn=%u, data_cq_index=%d, data_cq=%p)",
+		// 				id, peer_id, data_qp, ret, ++data_cnt,
+		// 				(unsigned)wc[0].qp_num,
+		// 				(unsigned)peer->qp[data_qp]->qp_num,
+		// 				peer->data_cq_index,
+		// 				(void*)peer->data_cq);
+		// 			handled_data_qp = true;
+		// 			break;
+		// 		}
+		// 	}
+		// 	if(!handled_data_qp)
+		// 		Debug::debugItem("RequestPoller[%d]: unexpected wc opcode=%d flags=0x%x, qp_num:%d (no data-qp owner found)",
+		// 			id, (int)wc[0].opcode, (unsigned)wc[0].wc_flags, wc[0].qp_num);
+		// }
 
 		// if (!handled_data_qp) {
 		// 	Debug::notifyInfo("RequestPoller[%d]: unexpected wc opcode=%d flags=0x%x",
@@ -254,8 +263,34 @@ void RPCServer::ProcessRequest(GeneralSendBuffer *send, uint16_t NodeID, uint16_
     	return;
 	} else {
 		if (recv->result) {
-	    		fs->parseMessage((char*)send, receiveBuffer);
-	    		// fs->recursivereaddir("/", 0);
+			// For raw IO test path, temporarily clamp parsed size to one window.
+			uint64_t tmpsz = 0;
+			bool adjustedRawSize = false;
+			if (send->message == MESSAGE_RAWREAD) {
+				ExtentReadSendBuffer *tmpb = (ExtentReadSendBuffer *)send;
+				tmpsz = tmpb->size;
+				if (tmpb->size > chunkSize) {
+					tmpb->size = chunkSize;
+				}
+				adjustedRawSize = true;
+			} else if (send->message == MESSAGE_RAWWRITE) {
+				ExtentWriteSendBuffer *tmpb = (ExtentWriteSendBuffer *)send;
+				tmpsz = tmpb->size;
+				if (tmpb->size > chunkSize) {
+					tmpb->size = chunkSize;
+				}
+				adjustedRawSize = true;
+			}
+
+			fs->parseMessage((char*)send, receiveBuffer);
+			if (adjustedRawSize) {
+				if (send->message == MESSAGE_RAWREAD) {
+					((ExtentReadSendBuffer *)send)->size = tmpsz;
+				} else if (send->message == MESSAGE_RAWWRITE) {
+					((ExtentWriteSendBuffer *)send)->size = tmpsz;
+				}
+			}
+			// fs->recursivereaddir("/", 0);
 			Debug::debugItem("Contract Receive Buffer, size = %lu.", size);
 			uint64_t contract_size = ContractReceiveBuffer(send, recv);
 			if (contract_size > size) {
@@ -265,28 +300,50 @@ void RPCServer::ProcessRequest(GeneralSendBuffer *send, uint16_t NodeID, uint16_
 			} else {
 				size -= contract_size;
 			}
-	    		if (send->message == MESSAGE_RAWREAD) {
-	    			ExtentReadSendBuffer *bufferSend = (ExtentReadSendBuffer *)send;
+			if (send->message == MESSAGE_RAWREAD) {
+				ExtentReadSendBuffer *bufferSend = (ExtentReadSendBuffer *)send;
 				int data_qp = (bufferSend->size >= DATA_QP_SPLIT_SIZE) ?
-					DATA_QP_LARGE_INDEX : DATA_QP_SMALL_INDEX;
-	    			uint64_t *value = (uint64_t *)mem->getDataAddress();
-	    			// printf("rawread size = %d\n", (int)bufferSend->size);
-	    			*value = 1;
-				if (!socket->RdmaWrite(NodeID, mem->getDataAddress(), 2 * 4096, bufferSend->size, -1, data_qp)) {
+				DATA_QP_LARGE_INDEX : DATA_QP_SMALL_INDEX;
+				// printf("rawread size = %d\n", (int)bufferSend->size);
+				//uint64_t flagSourceAddr = mem->getDataAddress() + ((uint64_t)NodeID * 64);
+				uint64_t flagSourceAddr = mem->getDataAddress() + ((uint64_t)NodeID * 64);
+				uint64_t *value = (uint64_t *)flagSourceAddr;
+				//*value = 0;
+
+				// struct timeval rdma_write_begin, rdma_write_end;
+				// static thread_local uint64_t rawread_write_timing_cnt = 0;
+				// gettimeofday(&rdma_write_begin, NULL);
+
+				bool rdma_write_ok = socket->RdmaWrite(NodeID, flagSourceAddr, 2 * 4096, bufferSend->size, -1, data_qp);
+				
+				// gettimeofday(&rdma_write_end, NULL);
+				// long long rdma_write_cost_us =
+				// 	1000000LL * (rdma_write_end.tv_sec - rdma_write_begin.tv_sec) +
+				// 	(rdma_write_end.tv_usec - rdma_write_begin.tv_usec);
+				// rawread_write_timing_cnt += 1;
+				// if ((rawread_write_timing_cnt % 500) == 0) {
+				// 	Debug::notifyInfo("ProcessRequest: MESSAGE_RAWREAD RdmaWrite cost=%lld us (NodeID=%u, size=%lu, data_qp=%d, ok=%d, cnt=%lu)",
+				// 		rdma_write_cost_us, (unsigned)NodeID, bufferSend->size, data_qp,
+				// 		rdma_write_ok ? 1 : 0, rawread_write_timing_cnt);
+				// }
+				
+				if (!rdma_write_ok) {
 					Debug::notifyError("ProcessRequest: MESSAGE_RAWREAD data write failed (NodeID=%u, size=%lu, data_qp=%d)",
 						(unsigned)NodeID, bufferSend->size, data_qp);
 					recv->result = false;
 				}
-	    		} else if (send->message == MESSAGE_RAWWRITE) {
-	    			ExtentWriteSendBuffer *bufferSend = (ExtentWriteSendBuffer *)send;
-	    			// printf("rawwrite size = %d\n", (int)bufferSend->size);
-				if (!socket->RemoteRead(mem->getDataAddress(), NodeID, 2 * 4096, bufferSend->size)) {
+			} else if (send->message == MESSAGE_RAWWRITE) {
+				ExtentWriteSendBuffer *bufferSend = (ExtentWriteSendBuffer *)send;
+				// printf("rawwrite size = %d\n", (int)bufferSend->size);
+				int data_qp = (bufferSend->size >= DATA_QP_SPLIT_SIZE) ?
+					DATA_QP_LARGE_INDEX : DATA_QP_SMALL_INDEX;
+				uint64_t flagSourceAddr = mem->getDataAddress() + ((uint64_t)NodeID * 64);
+				if (!socket->RdmaRead(NodeID, flagSourceAddr, 2 * 4096, bufferSend->size, data_qp)) {
 					Debug::notifyError("ProcessRequest: MESSAGE_RAWWRITE data read failed (NodeID=%u, size=%lu)",
 						(unsigned)NodeID, bufferSend->size);
 					recv->result = false;
-					//exit(-1);
 				}
-	    		}
+			}
 		}
 
 		Debug::debugItem("Copy Reply Data, size = %lu.", size);

@@ -180,7 +180,8 @@ bool RdmaSocket::BindPeerCqs(PeerSockData *peer) {
 RdmaSocket::RdmaSocket(int _cqNum, uint64_t _mm, uint64_t _mmSize, Configuration* _conf, bool _isServer, uint8_t _Mode, uint32_t _srmAppThreads) :
 DeviceName(NULL), Port(1), ServerPort(5678), GidIndex(0), 
 isRunning(true), isServer(_isServer), cqNum(_cqNum), cqPtr(0), 
-mm(_mm), mmSize(_mmSize), conf(_conf), MaxNodeID(1), listenSock(-1), Mode(_Mode), srmAppThreads(_srmAppThreads) {
+mm(_mm), mmSize(_mmSize), conf(_conf), MaxNodeID(1), listenSock(-1), Mode(_Mode), ServerCount(0), srmAppThreads(_srmAppThreads),
+createWorkerCount((_srmAppThreads > 0) ? _srmAppThreads : 1), clientCreateWorkerCount(1), nextCreateWorker(0), nextClientCreateIndex(0) {
     for (int i = 0; i < 1000; i++) {
         peers[i] = NULL;
     }
@@ -191,6 +192,14 @@ mm(_mm), mmSize(_mmSize), conf(_conf), MaxNodeID(1), listenSock(-1), Mode(_Mode)
 	/* Find my IP, and initialize my NodeID (At server side). */
 	/* NodeID at client side will be given on connection */
     ServerCount = conf->getServerCount();
+    srmAppThreads = createWorkerCount;
+    // createWorkerCount here is already the number of workers serving client requests
+    // (worker IDs are 1..createWorkerCount, worker 0 is not in this count).
+    clientCreateWorkerCount = (createWorkerCount > 0) ? createWorkerCount : 1;
+    createPhaseOpenByWorker.assign(createWorkerCount + 1, 0);
+    for (uint32_t i = 1; i <= clientCreateWorkerCount; ++i) {
+        createPhaseOpenByWorker[i] = 1;
+    }
     MaxNodeID = ServerCount + 1;
 	if (isServer) {
         MyNodeID = octopus_pick_node_id_from_conf(conf);
@@ -412,7 +421,7 @@ bool RdmaSocket::CreateResources() {
     return true;
 }
 
-bool RdmaSocket::CreateQueuePair(PeerSockData *peer, int offset) {
+bool RdmaSocket::CreateQueuePair(PeerSockData *peer, int offset, int workerIdHint) {
 
 	struct ibv_qp_init_attr attr;
 	memset(&attr, 0, sizeof(attr));
@@ -436,7 +445,9 @@ bool RdmaSocket::CreateQueuePair(PeerSockData *peer, int offset) {
         int controlCqCount = (cqNum >= 2) ? (cqNum / 2) : 1;
         if (offset == CONTROL_QP_INDEX) {
             int workerCq = 0;
-            if (controlCqCount > 1) {
+            if (workerIdHint > 0 && workerIdHint < controlCqCount) {
+                workerCq = workerIdHint;
+            } else if (controlCqCount > 1) {
                 int span = controlCqCount - 1;
                 workerCq = 1 + (cqPtr % span);
             }
@@ -510,7 +521,7 @@ bool RdmaSocket::CreateSrmDataQueuePair(PeerSockData *peer, int offset) {
         attr_ex.sender_side = 1;
         attr_ex.rnode_num = 1;
         attr_ex.srm_app_threads = (srmAppThreads > 0) ? srmAppThreads : 1;
-        attr_ex.srm_xrc_qp_num_per_srm = 16;//Server端就一个
+        attr_ex.srm_xrc_qp_num_per_srm = MAX_CLIENT_NUMBER / srmAppThreads;//Server端就一个
     }
 
     peer->qp[offset] = ibv_create_qp_ex(ctx, &attr_ex);
@@ -615,7 +626,7 @@ bool RdmaSocket::ModifyQPtoRTS(struct ibv_qp *qp) {
     return true;
 }
 
-bool RdmaSocket::ConnectQueuePair(PeerSockData *peer) {
+bool RdmaSocket::ConnectQueuePair(PeerSockData *peer, int workerIdHint) {
 	ExchangeMeta LocalMeta, RemoteMeta;
     ExchangeID LocalID, RemoteID;
 	int rc = 0, N;
@@ -652,7 +663,7 @@ bool RdmaSocket::ConnectQueuePair(PeerSockData *peer) {
         MyNodeID = RemoteID.GivenID;
     }
 
-	if (!CreateQueuePair(peer, 0)) {
+	if (!CreateQueuePair(peer, 0, workerIdHint)) {
         rc = 1;
         goto ConnectQPExit;
     }
@@ -661,7 +672,7 @@ bool RdmaSocket::ConnectQueuePair(PeerSockData *peer) {
         /* Connection between server and client, create data channel. */
         DoubleQP = true;
         for (int i = 1; i < QP_NUMBER; i++) {
-            if (!CreateQueuePair(peer, i)) {
+            if (!CreateQueuePair(peer, i, workerIdHint)) {
                 rc = 1;
                 goto ConnectQPExit;
             }
@@ -857,33 +868,12 @@ void RdmaSocket::RdmaAccept(int sock) {
     while (isRunning && (fd = accept(sock, (struct sockaddr *)&RemoteAddress, &sin_size)) != -1)
     {
         Debug::notifyInfo("Discover New Client");
-        PeerSockData *peer = (PeerSockData *)malloc(sizeof(PeerSockData));
-        peer->sock = fd;
-        peer->counter = 0;
-        if (ConnectQueuePair(peer) == false) {
-            Debug::notifyError("RDMA connect with error");
+        if (!EnqueueConnectTask(fd, 0, false)) {
+            Debug::notifyInfo("Client dropped because create phase is closed");
             close(fd);
-            free(peer);
-        } else {
-            if (peer->NodeID >= 1000) {
-                Debug::notifyError("Client NodeID %d exceeds peer table limit", peer->NodeID);
-                close(fd);
-                free(peer);
-                continue;
-            }
-            peers[peer->NodeID] = peer;
-            Debug::notifyInfo("Client %d Joined Us", peer->NodeID);
-            /* Rdma Receive in Advance. */
-            int posted_recv = 0;
-            for (int i = 0; i < QPS_MAX_DEPTH; i++) {
-                if (RdmaReceive(peer->NodeID, mm + peer->NodeID * 4096, 0)) {
-                    posted_recv += 1;
-                }
-            }
-            Debug::notifyInfo("Client %d pre-post recv on control QP: %d/%d", peer->NodeID, posted_recv, QPS_MAX_DEPTH);
-
-            Debug::debugItem("Accepted to Node%d", peer->NodeID);
+            continue;
         }
+        Debug::notifyInfo("Queued client QP creation request to worker");
     }
 }
 
@@ -896,23 +886,164 @@ void RdmaSocket::ServerConnect() {
             if (sock < 0) {
                 Debug::notifyError("Socket connection failed to servers");
                 return;
-            }            PeerSockData *peer = (PeerSockData *)malloc(sizeof(PeerSockData));
-            peer->sock = sock;
-            peer->NodeID = kv.first;
-            if (ConnectQueuePair(peer) == false) {
-                Debug::notifyError("RDMA connect with error");
+            }
+            if (!EnqueueConnectTask(sock, kv.first, true)) {
+                Debug::notifyError("ServerConnect: create phase closed, cannot enqueue Node%d", kv.first);
+                close(sock);
                 return;
-            } else {
-                //SyncTool(peer->NodeID);
-                peers[peer->NodeID] = peer;
-                peer->counter = 0;
-                for (int i = 0; i < QPS_MAX_DEPTH; i++) {
-                    RdmaReceive(peer->NodeID, mm + peer->NodeID * 4096, 0);
+            }
+            Debug::notifyInfo("ServerConnect: queued Node%d QP creation to worker", kv.first);
+        }
+    }
+}
+
+bool RdmaSocket::EnqueueConnectTask(int sock, uint16_t presetNodeID, bool hasPresetNodeID) {
+    std::lock_guard<std::mutex> lock(pendingConnectMutex);
+    int targetWorker = -1;
+
+    if (!hasPresetNodeID) {
+        // Client-side accepted connections are assigned in contiguous blocks:
+        // worker 1 gets first block, then worker 2, and so on.
+        uint32_t clientIndex = nextClientCreateIndex.fetch_add(1, std::memory_order_relaxed);
+        uint32_t compileTimeClientNum = MAX_CLIENT_NUMBER;
+        uint32_t clientsPerWorker = (compileTimeClientNum + clientCreateWorkerCount - 1) / clientCreateWorkerCount;
+        if (clientsPerWorker == 0) {
+            clientsPerWorker = 1;
+        }
+
+        uint32_t workerOffset = clientIndex / clientsPerWorker;
+        if (workerOffset >= clientCreateWorkerCount) {
+            workerOffset = clientCreateWorkerCount - 1;
+        }
+        targetWorker = 1 + static_cast<int>(workerOffset);
+
+        if (!createPhaseOpenByWorker[targetWorker]) {
+            // Fallback to any currently open worker if the preferred worker is closed.
+            for (uint32_t i = 0; i < clientCreateWorkerCount; ++i) {
+                int candidate = 1 + static_cast<int>(i);
+                if (createPhaseOpenByWorker[candidate]) {
+                    targetWorker = candidate;
+                    break;
                 }
-                Debug::debugItem("Finished Connecting to Node%d", peer->NodeID);
+            }
+        }
+    } else {
+        // Keep server-to-server connection assignment as round-robin.
+        uint32_t rr = nextCreateWorker.fetch_add(1, std::memory_order_relaxed);
+        for (uint32_t i = 0; i < clientCreateWorkerCount; ++i) {
+            int candidate = 1 + ((rr + i) % clientCreateWorkerCount);
+            if (createPhaseOpenByWorker[candidate]) {
+                targetWorker = candidate;
+                break;
             }
         }
     }
+
+    if (targetWorker < 0) {
+        return false;
+    }
+
+    PendingConnectTask task;
+    task.sock = sock;
+    task.presetNodeID = presetNodeID;
+    task.hasPresetNodeID = hasPresetNodeID;
+    task.workerId = targetWorker;
+
+    pendingConnectTasks.push_back(task);
+    return true;
+}
+
+bool RdmaSocket::ProcessPendingConnectTask(int workerId) {
+    if (!isServer) {
+        return false;
+    }
+    if (workerId <= 0 || workerId > (int)clientCreateWorkerCount) {
+        return false;
+    }
+
+    PendingConnectTask task;
+    bool found = false;
+    {
+        std::lock_guard<std::mutex> lock(pendingConnectMutex);
+        if (!createPhaseOpenByWorker[workerId]) {
+            return false;
+        }
+        for (auto it = pendingConnectTasks.begin(); it != pendingConnectTasks.end(); ++it) {
+            if (it->workerId == workerId) {
+                task = *it;
+                pendingConnectTasks.erase(it);
+                found = true;
+                break;
+            }
+        }
+    }
+    if (!found) {
+        return false;
+    }
+
+    PeerSockData *peer = (PeerSockData *)malloc(sizeof(PeerSockData));
+    peer->sock = task.sock;
+    peer->counter = 0;
+    if (task.hasPresetNodeID) {
+        peer->NodeID = task.presetNodeID;
+    }
+
+    if (ConnectQueuePair(peer, workerId) == false) {
+        Debug::notifyError("ProcessPendingConnectTask: RDMA connect failed on worker %d", workerId);
+        close(task.sock);
+        free(peer);
+        return true;
+    }
+
+    if (peer->NodeID >= 1000) {
+        Debug::notifyError("ProcessPendingConnectTask: NodeID %d exceeds peer table limit", peer->NodeID);
+        close(task.sock);
+        free(peer);
+        return true;
+    }
+
+    peers[peer->NodeID] = peer;
+    Debug::notifyInfo("Worker %d created QP for Node %d", workerId, peer->NodeID);
+
+    int posted_recv = 0;
+    for (int i = 0; i < QPS_MAX_DEPTH; i++) {
+        if (RdmaReceive(peer->NodeID, mm + peer->NodeID * 4096, 0)) {
+            posted_recv += 1;
+        }
+    }
+    Debug::notifyInfo("Node %d pre-post recv on control QP: %d/%d", peer->NodeID, posted_recv, QPS_MAX_DEPTH);
+    return true;
+}
+
+void RdmaSocket::NotifyWorkerSawCqe(int workerId) {
+    if (workerId <= 0 || workerId > (int)clientCreateWorkerCount) {
+        return;
+    }
+
+    std::deque<PendingConnectTask> dropped;
+    {
+        std::lock_guard<std::mutex> lock(pendingConnectMutex);
+        if (!createPhaseOpenByWorker[workerId]) {
+            return;
+        }
+        createPhaseOpenByWorker[workerId] = 0;
+
+        for (auto it = pendingConnectTasks.begin(); it != pendingConnectTasks.end(); ) {
+            if (it->workerId == workerId) {
+                dropped.push_back(*it);
+                it = pendingConnectTasks.erase(it);
+            } else {
+                ++it;
+            }
+        }
+    }
+
+    for (auto &task : dropped) {
+        close(task.sock);
+    }
+
+    Debug::notifyInfo("Worker %d saw first CQE, create phase closed for this worker, dropped %lu pending connect tasks",
+                      workerId, (unsigned long)dropped.size());
 }
 
 int RdmaSocket::SocketConnect(uint16_t NodeID) {
@@ -1148,34 +1279,45 @@ bool RdmaSocket::RdmaRead(uint16_t NodeID, uint64_t SourceBuffer, uint64_t DesBu
     struct ibv_sge sg;
     struct ibv_send_wr wr;
     struct ibv_send_wr *wrBad;
-     
-    memset(&sg, 0, sizeof(sg));
-    sg.addr   = (uintptr_t)SourceBuffer;
-    sg.length = BufferSize;
-    sg.lkey   = mr->lkey;
-     
-    memset(&wr, 0, sizeof(wr));
-    wr.wr_id      = 0;
-    wr.sg_list    = &sg;
-    wr.num_sge    = 1;
-    wr.opcode     = IBV_WR_RDMA_READ;
-    wr.send_flags = IBV_SEND_SIGNALED;
-    wr.wr.rdma.remote_addr = DesBuffer + peer->RegisteredMemory;
-    wr.wr.rdma.rkey        = peer->rkey;
-     
-    if (ibv_post_send(peer->qp[TaskID], &wr, &wrBad)) {
-        Debug::notifyError("Send with RDMA_READ failed.");
-        return false;
+
+    uint64_t chunkCount = (BufferSize + chunkSize - 1) / chunkSize;
+    if (chunkCount == 0) {
+        chunkCount = 1;
+    }
+
+    for (uint64_t chunkIdx = 0; chunkIdx < chunkCount; ++chunkIdx) {
+        uint64_t offset = chunkIdx * chunkSize;
+        uint64_t thisSize = (BufferSize - offset >= chunkSize) ? chunkSize : (BufferSize - offset);
+
+        memset(&sg, 0, sizeof(sg));
+        sg.addr   = (uintptr_t)(SourceBuffer);
+        sg.length = thisSize;
+        sg.lkey   = mr->lkey;
+
+        memset(&wr, 0, sizeof(wr));
+        wr.wr_id      = 0;
+        wr.sg_list    = &sg;
+        wr.num_sge    = 1;
+        wr.opcode     = IBV_WR_RDMA_READ;
+        wr.send_flags = IBV_SEND_SIGNALED;
+        wr.wr.rdma.remote_addr = DesBuffer  + peer->RegisteredMemory;
+        wr.wr.rdma.rkey        = peer->rkey;
+
+        if (ibv_post_send(peer->qp[TaskID], &wr, &wrBad)) {
+            Debug::notifyError("Send with RDMA_READ failed.");
+            return false;
+        }
     }
 
     if (isServer && TaskID >= DATA_QP_SMALL_INDEX && TaskID <= DATA_QP_LARGE_INDEX) {
         const long timeout_ms = 2000;
         const uint32_t expect_qpn = peer->qp[TaskID]->qp_num;
-        struct ibv_wc wc;
+        struct ibv_wc wc[1000];
         struct timespec start_ts, now_ts;
         clock_gettime(CLOCK_MONOTONIC, &start_ts);
-        while (true) {
-            int rc = ibv_poll_cq(peer->data_cq, 1, &wc);
+        uint64_t gotExpected = 0;
+        while (gotExpected < chunkCount) {
+            int rc = ibv_poll_cq(peer->data_cq, chunkCount - gotExpected, wc);
             if (rc < 0) {
                 Debug::notifyError("RdmaRead: ibv_poll_cq failed (NodeID=%d, TaskID=%d, data_cq_index=%d, rc=%d)",
                     NodeID, TaskID, peer->data_cq_index, rc);
@@ -1195,27 +1337,27 @@ bool RdmaSocket::RdmaRead(uint16_t NodeID, uint64_t SourceBuffer, uint64_t DesBu
                 continue;
             }
 
-            if (wc.status != IBV_WC_SUCCESS) {
+            if (wc[0].status != IBV_WC_SUCCESS) {
                 Debug::notifyError("RdmaRead: bad data CQE status=%s(%d), NodeID=%d, TaskID=%d, cq_index=%d, data_cq=%p, qp=%p, qp_num=%u, opcode=%d",
-                    ibv_wc_status_str(wc.status), wc.status, NodeID, TaskID,
+                    ibv_wc_status_str(wc[0].status), wc[0].status, NodeID, TaskID,
                     peer->data_cq_index, (void*)peer->data_cq,
-                    (void*)peer->qp[TaskID], wc.qp_num, (int)wc.opcode);
+                    (void*)peer->qp[TaskID], wc[0].qp_num, (int)wc[0].opcode);
                 return false;
             }
 
-            if (wc.qp_num != expect_qpn) {
+            if (wc[0].qp_num != expect_qpn) {
                 Debug::notifyError("RdmaRead: got CQE from unexpected QP (NodeID=%d, TaskID=%d, cq_index=%d, expect_qpn=%u, got_qpn=%u, opcode=%d)",
-                    NodeID, TaskID, peer->data_cq_index, expect_qpn, wc.qp_num, (int)wc.opcode);
+                    NodeID, TaskID, peer->data_cq_index, expect_qpn, wc[0].qp_num, (int)wc[0].opcode);
                 continue;
             }
+            gotExpected += rc;
             if (USE_SRM) {
-                if (ibv_srm_add_tot_recv_cqes(peer->qp[TaskID], 1)) {
+                if (ibv_srm_add_tot_recv_cqes(peer->qp[TaskID], rc)) {
                     Debug::notifyError("RdmaRead: ibv_srm_add_tot_recv_cqes failed (NodeID=%d, TaskID=%d, qp_num=%u)",
                         NodeID, TaskID, expect_qpn);
                     return false;
                 }
             }
-            break;
         }
     }
 	return true;
@@ -1330,39 +1472,66 @@ bool RdmaSocket::RdmaWrite(uint16_t NodeID, uint64_t SourceBuffer, uint64_t DesB
         Debug::notifyError("RdmaWrite: no RDMA peer for NodeID %d", NodeID);
         return false;
     }
-    memset(&sg, 0, sizeof(sg));
-    sg.addr   = (uintptr_t)SourceBuffer;
-    sg.length = BufferSize;
-    sg.lkey   = mr->lkey;
-     
-    memset(&wr, 0, sizeof(wr));
-    wr.wr_id      = 0;
-    wr.sg_list    = &sg;
-    wr.num_sge    = 1;
-    if((int32_t)imm == -1) {
-        wr.opcode     = IBV_WR_RDMA_WRITE;
-    } else {
-        wr.opcode     = IBV_WR_RDMA_WRITE_WITH_IMM;
-        wr.imm_data   = htonl(imm);
-    }
-    wr.send_flags = IBV_SEND_SIGNALED;
-    wr.wr.rdma.remote_addr = DesBuffer + peer->RegisteredMemory;
-    Debug::debugItem("Post RDMA_WRITE with remote address = %lx", wr.wr.rdma.remote_addr);
-    wr.wr.rdma.rkey        = peer->rkey;
-    if (ibv_post_send(peer->qp[TaskID], &wr, &wrBad)) {
-        Debug::notifyError("Send with RDMA_WRITE(WITH_IMM) failed.");
-        printf("%s\n", strerror(errno));
-        return false;
+    uint64_t chunkCount = (BufferSize + chunkSize - 1) / chunkSize;
+    if (chunkCount == 0) {
+        chunkCount = 1;
     }
 
+    for (uint64_t chunkIdx = 0; chunkIdx < chunkCount; ++chunkIdx) {
+        uint64_t offset = chunkIdx * chunkSize;
+        uint64_t thisSize = (BufferSize - offset >= chunkSize) ? chunkSize : (BufferSize - offset);
+
+        memset(&sg, 0, sizeof(sg));
+        sg.addr   = (uintptr_t)(SourceBuffer);
+        sg.length = thisSize;
+        sg.lkey   = mr->lkey;
+
+        memset(&wr, 0, sizeof(wr));
+        wr.wr_id      = 0;
+        wr.sg_list    = &sg;
+        wr.num_sge    = 1;
+        if ((int32_t)imm == -1 || chunkIdx + 1 < chunkCount) {
+        wr.opcode = IBV_WR_RDMA_WRITE;
+        } else {
+            // Keep immediate semantics on the last chunk only.
+            wr.opcode   = IBV_WR_RDMA_WRITE_WITH_IMM;
+            wr.imm_data = htonl(imm);
+        }
+        wr.send_flags = IBV_SEND_SIGNALED;
+            wr.wr.rdma.remote_addr = DesBuffer + peer->RegisteredMemory;
+        Debug::debugItem("Post RDMA_WRITE with remote address = %lx", wr.wr.rdma.remote_addr);
+        wr.wr.rdma.rkey        = peer->rkey;
+
+        // if(chunkIdx == chunkCount - 1){
+        //     uint64_t *value = (uint64_t *)SourceBuffer;
+        //     *value = 1; 
+        // }
+        if (ibv_post_send(peer->qp[TaskID], &wr, &wrBad)) {
+            Debug::notifyError("Send with RDMA_WRITE(WITH_IMM) failed.");
+            printf("%s\n", strerror(errno));
+            return false;
+        }
+
+
+    }
+
+    // clock_gettime(CLOCK_MONOTONIC, &post_end_ts);
+    // long post_send_us =
+    //     (post_end_ts.tv_sec - post_begin_ts.tv_sec) * 1000000L +
+    //     (post_end_ts.tv_nsec - post_begin_ts.tv_nsec) / 1000L;
     if (isServer && TaskID >= DATA_QP_SMALL_INDEX && TaskID <= DATA_QP_LARGE_INDEX) {
-        const long timeout_ms = 2000;
+        const long timeout_ms = 20000;
         const uint32_t expect_qpn = peer->qp[TaskID]->qp_num;
-        struct ibv_wc wc;
+        struct ibv_wc wc[100];
         struct timespec start_ts, now_ts;
+
+        // struct timespec poll_begin_ts, poll_end_ts;
+        // clock_gettime(CLOCK_MONOTONIC, &poll_begin_ts);
+
         clock_gettime(CLOCK_MONOTONIC, &start_ts);
-        while (true) {
-            int rc = ibv_poll_cq(peer->data_cq, 1, &wc);
+        uint64_t gotExpected = 0;
+        while (gotExpected < chunkCount) {
+            int rc = ibv_poll_cq(peer->data_cq, chunkCount - gotExpected, wc);
             if (rc < 0) {
                 Debug::notifyError("RdmaWrite: ibv_poll_cq failed (NodeID=%d, TaskID=%d, data_cq_index=%d, data_cq=%p, qp=%p, expect_qpn=%u, rc=%d)",
                     NodeID, TaskID, peer->data_cq_index, (void*)peer->data_cq,
@@ -1384,31 +1553,46 @@ bool RdmaSocket::RdmaWrite(uint16_t NodeID, uint64_t SourceBuffer, uint64_t DesB
                 continue;
             }
 
-            if (wc.status != IBV_WC_SUCCESS) {
+            if (wc[0].status != IBV_WC_SUCCESS) {
                 Debug::notifyError("RdmaWrite: bad data CQE status=%s(%d), NodeID=%d, TaskID=%d, cq_index=%d, data_cq=%p, qp=%p, qp_num=%u, opcode=%d",
-                    ibv_wc_status_str(wc.status), wc.status, NodeID, TaskID,
+                    ibv_wc_status_str(wc[0].status), wc[0].status, NodeID, TaskID,
                     peer->data_cq_index, (void*)peer->data_cq,
-                    (void*)peer->qp[TaskID], wc.qp_num, (int)wc.opcode);
+                    (void*)peer->qp[TaskID], wc[0].qp_num, (int)wc[0].opcode);
                 return false;
             }
 
 
-            if (wc.qp_num != expect_qpn) {
+            if (wc[0].qp_num != expect_qpn) {
                 Debug::notifyError("RdmaWrite: got CQE from unexpected QP (NodeID=%d, TaskID=%d, cq_index=%d, data_cq=%p, qp=%p, expect_qpn=%u, got_qpn=%u, opcode=%d)",
                     NodeID, TaskID, peer->data_cq_index, (void*)peer->data_cq,
-                    (void*)peer->qp[TaskID], expect_qpn, wc.qp_num, (int)wc.opcode);
+                    (void*)peer->qp[TaskID], expect_qpn, wc[0].qp_num, (int)wc[0].opcode);
                 continue;
             }
+
+            gotExpected += rc;
+
+            // clock_gettime(CLOCK_MONOTONIC, &poll_end_ts);
+            // long poll_cq_us =
+            //     (poll_end_ts.tv_sec - poll_begin_ts.tv_sec) * 1000000L +
+            //     (poll_end_ts.tv_nsec - poll_begin_ts.tv_nsec) / 1000L;
+            // static thread_local uint64_t rdma_write_timing_cnt = 0;
+            // rdma_write_timing_cnt += 1;
+            // if ((rdma_write_timing_cnt % 500) == 0) {
+            //     Debug::notifyInfo("RdmaWriteTiming: post_send=%ld us, poll_cq=%ld us (NodeID=%d, TaskID=%d, qp_num=%u, data_cq_index=%d, size=%lu, cnt=%lu)",
+            //         post_send_us, poll_cq_us, NodeID, TaskID, expect_qpn,
+            //         peer->data_cq_index, BufferSize, rdma_write_timing_cnt);
+            // }
+
             Debug::debugItem("cqe_cnt = %d", ++cqe_cnt);
             if (USE_SRM) {
-                if (ibv_srm_add_tot_recv_cqes(peer->qp[TaskID], 1)) {
+                if (ibv_srm_add_tot_recv_cqes(peer->qp[TaskID], rc)) {
                     Debug::notifyError("RdmaWrite: ibv_srm_add_tot_recv_cqes failed (NodeID=%d, TaskID=%d, qp_num=%u)",
                         NodeID, TaskID, expect_qpn);
                     return false;
                 }
             }
-            break;
         }
+    
     }
 	return true;
 }

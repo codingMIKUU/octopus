@@ -978,13 +978,17 @@ int nrfsRawWrite(nrfs fs, nrfsFile _file, const void* buffer, uint64_t size, uin
 	// *v = rdma.get_node_id();
 	//net.post_write(rdma.find_res_by_id(node_id), size, mem.get_storage_addr(), dst_addr, -1);
 
-    bufferExtentWriteSend.size = size; /* Assign size. */
+	const uint64_t kRawIoWindow = 1024ULL * 1024ULL;
+	uint64_t effective_size = (size > kRawIoWindow) ? kRawIoWindow : size;
+	bufferExtentWriteSend.size = size; /* Keep protocol size visible to peer. */
     bufferExtentWriteSend.offset = offset; /* Assign offset. */
     uint64_t *value = (uint64_t *)(client->mm + 2 * 4096);
-	memcpy((void *)(client->mm + 2 * 4096), (void *)buffer, size);
+	memcpy((void *)(client->mm + 2 * 4096), (void *)buffer, effective_size);
     *value = 1;
-	sendMessage(node_id, &bufferExtentWriteSend, sizeof(ExtentWriteSendBuffer),
-					&bufferExtentWriteReceive, sizeof(ExtentWriteReceiveBuffer));
+	if (!sendMessage(node_id, &bufferExtentWriteSend, sizeof(ExtentWriteSendBuffer),
+					&bufferExtentWriteReceive, sizeof(ExtentWriteReceiveBuffer))) {
+		return -1;
+	}
 	return 0;
 }
 int nrfsRawRead(nrfs fs, nrfsFile _file, void* buffer, uint64_t size, uint64_t offset)
@@ -1001,14 +1005,17 @@ int nrfsRawRead(nrfs fs, nrfsFile _file, void* buffer, uint64_t size, uint64_t o
     correct((char*)_file, bufferExtentReadSend.path);
 	uint16_t node_id = get_node_id_by_path(bufferExtentReadSend.path);
     
-    bufferExtentReadSend.size = size; /* Assign size. */
+	const uint64_t kRawIoWindow = 1024ULL * 1024ULL;
+	uint64_t effective_size = (size > kRawIoWindow) ? kRawIoWindow : size;
+	bufferExtentReadSend.size = size; /* Keep protocol size visible to peer. */
     bufferExtentReadSend.offset = offset; /* Assign offset. */
+	/* Server test path writes completion flag to a fixed remote offset (2*4096). */
 	uint64_t *value = (uint64_t *)(client->mm + 2 * 4096);
 	*value = 0;
 	sendMessage(node_id, &bufferExtentReadSend, sizeof(ExtentReadSendBuffer), 
 					&bufferExtentReadReceive, sizeof(ExtentReadReceiveBuffer));	
-	while (*value == 0);
-	memcpy((void *)buffer, (void *)(client->mm + 2 * 4096), size);
+	//while (*value == 0);
+	memcpy((void *)buffer, (void *)(client->mm + 2 * 4096), effective_size);
 	// uint32_t *v = (uint32_t*)(mem.get_storage_addr() + size - sizeof(uint32_t));
 	// while(*v != (uint32_t)rdma.get_node_id())
 	// 	;

@@ -1,0 +1,1 @@
+/usr/bin/c++  -g -Wall -Wno-deprecated-declarations -Wsign-compare -std=c++11 -Wall -O0 -DTHREAD -D_FILE_OFFSET_BITS=64     -rdynamic -pthread CMakeFiles/cmTC_6289e.dir/test_mpi.cpp.o  -o cmTC_6289e  -Wl,-rpath,/usr/lib/x86_64-linux-gnu/openmpi/lib /usr/lib/x86_64-linux-gnu/openmpi/lib/libmpi_cxx.so /usr/lib/x86_64-linux-gnu/openmpi/lib/libmpi.so 

@@ -23,6 +23,10 @@
 #include <thread>
 #include <stdint.h>
 #include <assert.h>
+#include <deque>
+#include <mutex>
+#include <atomic>
+#include <vector>
 #include "Configuration.hpp"
 #include "debug.hpp"
 #include "global.h"
@@ -30,7 +34,7 @@
 * Important global information.
 */
 #define MAX_POST_LIST 24
-#define QPS_MAX_DEPTH 512
+#define QPS_MAX_DEPTH 1024
 #define SIGNAL_BATCH  1
 #define WORKER_NUMBER 2
 #define CONTROL_QP_INDEX 0
@@ -82,6 +86,13 @@ typedef struct {
 
 class RdmaSocket {
 private:
+	struct PendingConnectTask {
+		int sock;
+		uint16_t presetNodeID;
+		bool hasPresetNodeID;
+		int workerId;
+	};
+
 	// unordered_map<uint16_t, PeerSockData*> peers;
 	PeerSockData*			peers[1000];
 	char 					*DeviceName;
@@ -106,6 +117,13 @@ private:
 	uint8_t					Mode;			/* RC-0, UC-1, UD-2 */
 	int 					ServerCount;	/* The total number of servers */
 	uint32_t                srmAppThreads;
+	uint32_t                createWorkerCount;
+	uint32_t                clientCreateWorkerCount;
+	std::vector<uint8_t>    createPhaseOpenByWorker;
+	std::atomic<uint32_t>   nextCreateWorker;
+	std::atomic<uint32_t>   nextClientCreateIndex;
+	std::mutex              pendingConnectMutex;
+	std::deque<PendingConnectTask> pendingConnectTasks;
 	Queue<TransferTask *>   queue[WORKER_NUMBER];/* Used for Data transfer. */
 	uint16_t TransferSignal;				/* Used to notify compeletion of data transfer. */
 	thread 					worker[WORKER_NUMBER];
@@ -119,7 +137,7 @@ private:
 	bool 	 WriteTest;
 
 	bool CreateResources();
-	bool CreateQueuePair(PeerSockData *peer, int MaxWr);
+	bool CreateQueuePair(PeerSockData *peer, int MaxWr, int workerIdHint = -1);
 	bool CreateSrmDataQueuePair(PeerSockData *peer, int offset);
 	bool ModifyQPtoInit(struct ibv_qp *qp);
 	bool ModifyQPtoRTR(struct ibv_qp *qp, uint32_t remote_qpn, uint16_t dlid, uint8_t *dgid);
@@ -128,7 +146,8 @@ private:
 	int GetDataCqIndex(int peerIndex) const;
 	bool BindPeerCqs(PeerSockData *peer);
 	int PickDataQpBySize(uint64_t size) const;
-	bool ConnectQueuePair(PeerSockData *peer);
+	bool ConnectQueuePair(PeerSockData *peer, int workerIdHint = -1);
+	bool EnqueueConnectTask(int sock, uint16_t presetNodeID, bool hasPresetNodeID);
 	int DataSyncwithSocket(int sock, int size, char *LocalData, char *RemoteData);
 	bool ResourcesDestroy();
 	void RdmaAccept(int fd);
@@ -156,6 +175,8 @@ public:
 	void SyncTool(uint16_t NodeID);
 	int getCQCount();
 	uint16_t getNodeID();
+	bool ProcessPendingConnectTask(int workerId);
+	void NotifyWorkerSawCqe(int workerId);
 	void WaitClientConnection(uint16_t NodeID);
 	void RdmaQueryQueuePair(uint16_t NodeID);
 	void NotifyPerformance();
