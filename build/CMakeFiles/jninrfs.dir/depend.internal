@@ -26,10 +26,6 @@ CMakeFiles/jninrfs.dir/src/client/nrfs.cpp.o
  ../include/storage.hpp
  ../include/table.hpp
  /root/zxm/octopus/src/client/nrfs.cpp
- /root/zxm/rdma-core/build/include/infiniband/ib_user_ioctl_verbs.h
- /root/zxm/rdma-core/build/include/infiniband/verbs.h
- /root/zxm/rdma-core/build/include/infiniband/verbs_api.h
- /root/zxm/rdma-core/build/include/rdma/ib_user_verbs.h
 CMakeFiles/jninrfs.dir/src/fs/TxManager.cpp.o
  ../include/TxManager.hpp
  /root/zxm/octopus/src/fs/TxManager.cpp
@@ -53,10 +49,6 @@ CMakeFiles/jninrfs.dir/src/fs/dmfs.cpp.o
  ../include/storage.hpp
  ../include/table.hpp
  /root/zxm/octopus/src/fs/dmfs.cpp
- /root/zxm/rdma-core/build/include/infiniband/ib_user_ioctl_verbs.h
- /root/zxm/rdma-core/build/include/infiniband/verbs.h
- /root/zxm/rdma-core/build/include/infiniband/verbs_api.h
- /root/zxm/rdma-core/build/include/rdma/ib_user_verbs.h
 CMakeFiles/jninrfs.dir/src/fs/filesystem.cpp.o
  ../include/Configuration.hpp
  ../include/RPCClient.hpp
@@ -74,10 +66,6 @@ CMakeFiles/jninrfs.dir/src/fs/filesystem.cpp.o
  ../include/storage.hpp
  ../include/table.hpp
  /root/zxm/octopus/src/fs/filesystem.cpp
- /root/zxm/rdma-core/build/include/infiniband/ib_user_ioctl_verbs.h
- /root/zxm/rdma-core/build/include/infiniband/verbs.h
- /root/zxm/rdma-core/build/include/infiniband/verbs_api.h
- /root/zxm/rdma-core/build/include/rdma/ib_user_verbs.h
 CMakeFiles/jninrfs.dir/src/fs/hashtable.cpp.o
  ../include/bitmap.hpp
  ../include/debug.hpp
@@ -101,10 +89,6 @@ CMakeFiles/jninrfs.dir/src/fs/lock.cpp.o
  ../include/storage.hpp
  ../include/table.hpp
  /root/zxm/octopus/src/fs/lock.cpp
- /root/zxm/rdma-core/build/include/infiniband/ib_user_ioctl_verbs.h
- /root/zxm/rdma-core/build/include/infiniband/verbs.h
- /root/zxm/rdma-core/build/include/infiniband/verbs_api.h
- /root/zxm/rdma-core/build/include/rdma/ib_user_verbs.h
 CMakeFiles/jninrfs.dir/src/fs/storage.cpp.o
  ../include/bitmap.hpp
  ../include/common.hpp
@@ -114,10 +98,6 @@ CMakeFiles/jninrfs.dir/src/fs/storage.cpp.o
  ../include/storage.hpp
  ../include/table.hpp
  /root/zxm/octopus/src/fs/storage.cpp
- /root/zxm/rdma-core/build/include/infiniband/ib_user_ioctl_verbs.h
- /root/zxm/rdma-core/build/include/infiniband/verbs.h
- /root/zxm/rdma-core/build/include/infiniband/verbs_api.h
- /root/zxm/rdma-core/build/include/rdma/ib_user_verbs.h
 CMakeFiles/jninrfs.dir/src/net/Configuration.cpp.o
  ../include/Configuration.hpp
  ../include/debug.hpp
@@ -132,10 +112,6 @@ CMakeFiles/jninrfs.dir/src/net/RPCClient.cpp.o
  ../include/global.h
  ../include/mempool.hpp
  /root/zxm/octopus/src/net/RPCClient.cpp
- /root/zxm/rdma-core/build/include/infiniband/ib_user_ioctl_verbs.h
- /root/zxm/rdma-core/build/include/infiniband/verbs.h
- /root/zxm/rdma-core/build/include/infiniband/verbs_api.h
- /root/zxm/rdma-core/build/include/rdma/ib_user_verbs.h
 CMakeFiles/jninrfs.dir/src/net/RPCServer.cpp.o
  ../include/Configuration.hpp
  ../include/RPCClient.hpp
@@ -153,10 +129,6 @@ CMakeFiles/jninrfs.dir/src/net/RPCServer.cpp.o
  ../include/storage.hpp
  ../include/table.hpp
  /root/zxm/octopus/src/net/RPCServer.cpp
- /root/zxm/rdma-core/build/include/infiniband/ib_user_ioctl_verbs.h
- /root/zxm/rdma-core/build/include/infiniband/verbs.h
- /root/zxm/rdma-core/build/include/infiniband/verbs_api.h
- /root/zxm/rdma-core/build/include/rdma/ib_user_verbs.h
 CMakeFiles/jninrfs.dir/src/net/RdmaSocket.cpp.o
  ../include/Configuration.hpp
  ../include/RdmaSocket.hpp
@@ -164,20 +136,12 @@ CMakeFiles/jninrfs.dir/src/net/RdmaSocket.cpp.o
  ../include/debug.hpp
  ../include/global.h
  /root/zxm/octopus/src/net/RdmaSocket.cpp
- /root/zxm/rdma-core/build/include/infiniband/ib_user_ioctl_verbs.h
- /root/zxm/rdma-core/build/include/infiniband/verbs.h
- /root/zxm/rdma-core/build/include/infiniband/verbs_api.h
- /root/zxm/rdma-core/build/include/rdma/ib_user_verbs.h
 CMakeFiles/jninrfs.dir/src/net/mempool.cpp.o
  ../include/common.hpp
  ../include/debug.hpp
  ../include/global.h
  ../include/mempool.hpp
  /root/zxm/octopus/src/net/mempool.cpp
- /root/zxm/rdma-core/build/include/infiniband/ib_user_ioctl_verbs.h
- /root/zxm/rdma-core/build/include/infiniband/verbs.h
- /root/zxm/rdma-core/build/include/infiniband/verbs_api.h
- /root/zxm/rdma-core/build/include/rdma/ib_user_verbs.h
 CMakeFiles/jninrfs.dir/src/tools/debug.cpp.o
  ../include/debug.hpp
  /root/zxm/octopus/src/tools/debug.cpp

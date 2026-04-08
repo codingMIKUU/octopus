@@ -82,7 +82,7 @@ mpibw: CMakeFiles/mpibw.dir/build.make
 mpibw: /usr/lib/x86_64-linux-gnu/libcrypto.so
 mpibw: libnrfsc.so
 mpibw: /usr/lib/x86_64-linux-gnu/libcrypto.so
-mpibw: /root/zxm/rdma-core/build/lib/libibverbs.so
+mpibw: /usr/lib/libibverbs.so
 mpibw: /usr/lib/x86_64-linux-gnu/libfuse.so
 mpibw: CMakeFiles/mpibw.dir/link.txt
 	@$(CMAKE_COMMAND) -E cmake_echo_color --switch=$(COLOR) --green --bold --progress-dir=/root/zxm/octopus/build/CMakeFiles --progress-num=$(CMAKE_PROGRESS_2) "Linking CXX executable mpibw"

@@ -482,56 +482,17 @@ bool RdmaSocket::CreateQueuePair(PeerSockData *peer, int offset, int workerIdHin
         }
     }
 
-    if (!USE_SRM || !isServer || offset == CONTROL_QP_INDEX) {
-        attr.cap.max_send_wr = QPS_MAX_DEPTH;
-        attr.cap.max_recv_wr = QPS_MAX_DEPTH;
-        attr.cap.max_send_sge = 1;
-        attr.cap.max_recv_sge = 1;
-        attr.cap.max_inline_data = 0;
-        peer->qp[offset] = ibv_create_qp(pd, &attr);
-        if (!peer->qp[offset]) {
-	        Debug::notifyError("Failed to create native QP (offset=%d)", offset);
-	        return false;
-        }
-        Debug::notifyInfo("Create native Queue Pair(offset=%d) with Num = %d", offset, peer->qp[offset]->qp_num);
-        return true;
-    }
-
-    return CreateSrmDataQueuePair(peer, offset);
-}
-
-bool RdmaSocket::CreateSrmDataQueuePair(PeerSockData *peer, int offset) {
-    struct ibv_qp_init_attr_ex attr_ex;
-    memset(&attr_ex, 0, sizeof(attr_ex));
-
-    attr_ex.qp_type = (Mode == 1) ? IBV_QPT_UC : IBV_QPT_RC;
-    attr_ex.sq_sig_all = 0;
-    attr_ex.send_cq = peer->data_cq;
-    attr_ex.recv_cq = peer->data_cq;
-    attr_ex.pd = pd;
-    attr_ex.comp_mask = IBV_QP_INIT_ATTR_PD;
-
-    attr_ex.cap.max_send_wr = QPS_MAX_DEPTH;
-    attr_ex.cap.max_recv_wr = QPS_MAX_DEPTH;
-    attr_ex.cap.max_send_sge = 1;
-    attr_ex.cap.max_recv_sge = 1;
-    attr_ex.cap.max_inline_data = 0;
-
-    if (attr_ex.qp_type == IBV_QPT_RC) {
-        attr_ex.sender_side = 1;
-        attr_ex.rnode_num = 1;
-        attr_ex.srm_app_threads = (srmAppThreads > 0) ? srmAppThreads : 1;
-        attr_ex.srm_xrc_qp_num_per_srm = MAX_CLIENT_NUMBER / srmAppThreads;//Server端就一个
-    }
-
-    peer->qp[offset] = ibv_create_qp_ex(ctx, &attr_ex);
+    attr.cap.max_send_wr = QPS_MAX_DEPTH;
+    attr.cap.max_recv_wr = QPS_MAX_DEPTH;
+    attr.cap.max_send_sge = 1;
+    attr.cap.max_recv_sge = 1;
+    attr.cap.max_inline_data = 0;
+    peer->qp[offset] = ibv_create_qp(pd, &attr);
     if (!peer->qp[offset]) {
-        Debug::notifyError("Failed to create SRM data QP offset=%d", offset);
-        return false;
+	    Debug::notifyError("Failed to create native QP (offset=%d)", offset);
+	    return false;
     }
-
-    Debug::notifyInfo("Create SRM data Queue Pair(offset=%d) with Num = %d",
-                      offset, peer->qp[offset]->qp_num);
+    Debug::notifyInfo("Create native Queue Pair(offset=%d) with Num = %d", offset, peer->qp[offset]->qp_num);
     return true;
 }
 
@@ -1351,13 +1312,6 @@ bool RdmaSocket::RdmaRead(uint16_t NodeID, uint64_t SourceBuffer, uint64_t DesBu
                 continue;
             }
             gotExpected += rc;
-            if (USE_SRM) {
-                if (ibv_srm_add_tot_recv_cqes(peer->qp[TaskID], rc)) {
-                    Debug::notifyError("RdmaRead: ibv_srm_add_tot_recv_cqes failed (NodeID=%d, TaskID=%d, qp_num=%u)",
-                        NodeID, TaskID, expect_qpn);
-                    return false;
-                }
-            }
         }
     }
 	return true;
@@ -1584,13 +1538,6 @@ bool RdmaSocket::RdmaWrite(uint16_t NodeID, uint64_t SourceBuffer, uint64_t DesB
             // }
 
             Debug::debugItem("cqe_cnt = %d", ++cqe_cnt);
-            if (USE_SRM) {
-                if (ibv_srm_add_tot_recv_cqes(peer->qp[TaskID], rc)) {
-                    Debug::notifyError("RdmaWrite: ibv_srm_add_tot_recv_cqes failed (NodeID=%d, TaskID=%d, qp_num=%u)",
-                        NodeID, TaskID, expect_qpn);
-                    return false;
-                }
-            }
         }
     
     }
@@ -1832,10 +1779,6 @@ int RdmaSocket::PollCompletion(uint16_t NodeID, int PollNumber, struct ibv_wc *w
         return -1;
     }
 
-    if(USE_SRM && isDataPath){
-        Debug::debugItem("SRM: Add total recv cqes for Node%d, count = %d", NodeID, count);
-        ibv_srm_add_tot_recv_cqes(peers[NodeID]->qp[1],count);
-    }
     Debug::debugItem("Find New Completion Message");
     return count;
 }

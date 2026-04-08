@@ -82,7 +82,7 @@ locktest: CMakeFiles/locktest.dir/build.make
 locktest: /usr/lib/x86_64-linux-gnu/libcrypto.so
 locktest: libnrfsc.so
 locktest: /usr/lib/x86_64-linux-gnu/libcrypto.so
-locktest: /root/zxm/rdma-core/build/lib/libibverbs.so
+locktest: /usr/lib/libibverbs.so
 locktest: /usr/lib/x86_64-linux-gnu/libfuse.so
 locktest: CMakeFiles/locktest.dir/link.txt
 	@$(CMAKE_COMMAND) -E cmake_echo_color --switch=$(COLOR) --green --bold --progress-dir=/root/zxm/octopus/build/CMakeFiles --progress-num=$(CMAKE_PROGRESS_2) "Linking CXX executable locktest"

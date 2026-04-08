@@ -30,7 +30,7 @@ set(CMAKE_TARGET_DEFINITIONS_CXX
 
 # The include file search paths:
 set(CMAKE_CXX_TARGET_INCLUDE_PATH
-  "/root/zxm/rdma-core/build/include"
+  "/usr/local/ofed/include"
   "../include"
   "/usr/java/include"
   "/usr/java/include/linux"

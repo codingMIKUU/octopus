@@ -38,3 +38,121 @@ int main(void)
   return 0;
 }
 
+Performing C SOURCE FILE Test CMAKE_HAVE_LIBC_PTHREAD failed with the following output:
+Change Dir: /root/zxm/octopus/build/CMakeFiles/CMakeTmp
+
+Run Build Command(s):/usr/bin/make cmTC_8d220/fast && make[1]: Entering directory '/root/zxm/octopus/build/CMakeFiles/CMakeTmp'
+/usr/bin/make -f CMakeFiles/cmTC_8d220.dir/build.make CMakeFiles/cmTC_8d220.dir/build
+make[2]: Entering directory '/root/zxm/octopus/build/CMakeFiles/CMakeTmp'
+Building C object CMakeFiles/cmTC_8d220.dir/src.c.o
+/usr/bin/cc   -Wall -Wno-deprecated-declarations -Wsign-compare -DCMAKE_HAVE_LIBC_PTHREAD   -o CMakeFiles/cmTC_8d220.dir/src.c.o   -c /root/zxm/octopus/build/CMakeFiles/CMakeTmp/src.c
+Linking C executable cmTC_8d220
+/usr/bin/cmake -E cmake_link_script CMakeFiles/cmTC_8d220.dir/link.txt --verbose=1
+/usr/bin/cc -Wall -Wno-deprecated-declarations -Wsign-compare -DCMAKE_HAVE_LIBC_PTHREAD    -rdynamic CMakeFiles/cmTC_8d220.dir/src.c.o  -o cmTC_8d220 
+/usr/bin/ld: CMakeFiles/cmTC_8d220.dir/src.c.o: in function `main':
+src.c:(.text+0x46): undefined reference to `pthread_create'
+/usr/bin/ld: src.c:(.text+0x52): undefined reference to `pthread_detach'
+/usr/bin/ld: src.c:(.text+0x63): undefined reference to `pthread_join'
+collect2: error: ld returned 1 exit status
+make[2]: *** [CMakeFiles/cmTC_8d220.dir/build.make:87: cmTC_8d220] Error 1
+make[2]: Leaving directory '/root/zxm/octopus/build/CMakeFiles/CMakeTmp'
+make[1]: *** [Makefile:121: cmTC_8d220/fast] Error 2
+make[1]: Leaving directory '/root/zxm/octopus/build/CMakeFiles/CMakeTmp'
+
+
+Source file was:
+#include <pthread.h>
+
+void* test_func(void* data)
+{
+  return data;
+}
+
+int main(void)
+{
+  pthread_t thread;
+  pthread_create(&thread, NULL, test_func, NULL);
+  pthread_detach(thread);
+  pthread_join(thread, NULL);
+  pthread_atfork(NULL, NULL, NULL);
+  pthread_exit(NULL);
+
+  return 0;
+}
+
+The MPI test test_mpi for C in mode normal failed to compile with the following output:
+Change Dir: /root/zxm/octopus/build/CMakeFiles/CMakeTmp
+
+Run Build Command(s):/usr/bin/make cmTC_deca6/fast && make[1]: Entering directory '/root/zxm/octopus/build/CMakeFiles/CMakeTmp'
+/usr/bin/make -f CMakeFiles/cmTC_deca6.dir/build.make CMakeFiles/cmTC_deca6.dir/build
+make[2]: Entering directory '/root/zxm/octopus/build/CMakeFiles/CMakeTmp'
+Building C object CMakeFiles/cmTC_deca6.dir/test_mpi.c.o
+/usr/bin/cc   -Wall -Wno-deprecated-declarations -Wsign-compare    -o CMakeFiles/cmTC_deca6.dir/test_mpi.c.o   -c /usr/share/cmake-3.16/Modules/FindMPI/test_mpi.c
+/usr/share/cmake-3.16/Modules/FindMPI/test_mpi.c:1:10: fatal error: mpi.h: No such file or directory
+    1 | #include <mpi.h>
+      |          ^~~~~~~
+compilation terminated.
+make[2]: *** [CMakeFiles/cmTC_deca6.dir/build.make:66: CMakeFiles/cmTC_deca6.dir/test_mpi.c.o] Error 1
+make[2]: Leaving directory '/root/zxm/octopus/build/CMakeFiles/CMakeTmp'
+make[1]: *** [Makefile:121: cmTC_deca6/fast] Error 2
+make[1]: Leaving directory '/root/zxm/octopus/build/CMakeFiles/CMakeTmp'
+
+
+
+The MPI test test_mpi for CXX in mode normal failed to compile with the following output:
+Change Dir: /root/zxm/octopus/build/CMakeFiles/CMakeTmp
+
+Run Build Command(s):/usr/bin/make cmTC_5e563/fast && make[1]: Entering directory '/root/zxm/octopus/build/CMakeFiles/CMakeTmp'
+/usr/bin/make -f CMakeFiles/cmTC_5e563.dir/build.make CMakeFiles/cmTC_5e563.dir/build
+make[2]: Entering directory '/root/zxm/octopus/build/CMakeFiles/CMakeTmp'
+Building CXX object CMakeFiles/cmTC_5e563.dir/test_mpi.cpp.o
+/usr/bin/c++    -g -Wall -Wno-deprecated-declarations -Wsign-compare -std=c++11 -Wall -O0 -DTHREAD -D_FILE_OFFSET_BITS=64    -o CMakeFiles/cmTC_5e563.dir/test_mpi.cpp.o -c /root/zxm/octopus/build/CMakeFiles/FindMPI/test_mpi.cpp
+/root/zxm/octopus/build/CMakeFiles/FindMPI/test_mpi.cpp:1:10: fatal error: mpi.h: No such file or directory
+    1 | #include <mpi.h>
+      |          ^~~~~~~
+compilation terminated.
+make[2]: *** [CMakeFiles/cmTC_5e563.dir/build.make:66: CMakeFiles/cmTC_5e563.dir/test_mpi.cpp.o] Error 1
+make[2]: Leaving directory '/root/zxm/octopus/build/CMakeFiles/CMakeTmp'
+make[1]: *** [Makefile:121: cmTC_5e563/fast] Error 2
+make[1]: Leaving directory '/root/zxm/octopus/build/CMakeFiles/CMakeTmp'
+
+
+
+The MPI test test_mpi for C in mode normal failed to compile with the following output:
+Change Dir: /root/zxm/octopus/build/CMakeFiles/CMakeTmp
+
+Run Build Command(s):/usr/bin/make cmTC_4f8f1/fast && make[1]: Entering directory '/root/zxm/octopus/build/CMakeFiles/CMakeTmp'
+/usr/bin/make -f CMakeFiles/cmTC_4f8f1.dir/build.make CMakeFiles/cmTC_4f8f1.dir/build
+make[2]: Entering directory '/root/zxm/octopus/build/CMakeFiles/CMakeTmp'
+Building C object CMakeFiles/cmTC_4f8f1.dir/test_mpi.c.o
+/usr/bin/cc   -Wall -Wno-deprecated-declarations -Wsign-compare    -o CMakeFiles/cmTC_4f8f1.dir/test_mpi.c.o   -c /usr/share/cmake-3.16/Modules/FindMPI/test_mpi.c
+/usr/share/cmake-3.16/Modules/FindMPI/test_mpi.c:1:10: fatal error: mpi.h: No such file or directory
+    1 | #include <mpi.h>
+      |          ^~~~~~~
+compilation terminated.
+make[2]: *** [CMakeFiles/cmTC_4f8f1.dir/build.make:66: CMakeFiles/cmTC_4f8f1.dir/test_mpi.c.o] Error 1
+make[2]: Leaving directory '/root/zxm/octopus/build/CMakeFiles/CMakeTmp'
+make[1]: *** [Makefile:121: cmTC_4f8f1/fast] Error 2
+make[1]: Leaving directory '/root/zxm/octopus/build/CMakeFiles/CMakeTmp'
+
+
+
+The MPI test test_mpi for CXX in mode normal failed to compile with the following output:
+Change Dir: /root/zxm/octopus/build/CMakeFiles/CMakeTmp
+
+Run Build Command(s):/usr/bin/make cmTC_fd51b/fast && make[1]: Entering directory '/root/zxm/octopus/build/CMakeFiles/CMakeTmp'
+/usr/bin/make -f CMakeFiles/cmTC_fd51b.dir/build.make CMakeFiles/cmTC_fd51b.dir/build
+make[2]: Entering directory '/root/zxm/octopus/build/CMakeFiles/CMakeTmp'
+Building CXX object CMakeFiles/cmTC_fd51b.dir/test_mpi.cpp.o
+/usr/bin/c++    -g -Wall -Wno-deprecated-declarations -Wsign-compare -std=c++11 -Wall -O0 -DTHREAD -D_FILE_OFFSET_BITS=64    -o CMakeFiles/cmTC_fd51b.dir/test_mpi.cpp.o -c /root/zxm/octopus/build/CMakeFiles/FindMPI/test_mpi.cpp
+/root/zxm/octopus/build/CMakeFiles/FindMPI/test_mpi.cpp:1:10: fatal error: mpi.h: No such file or directory
+    1 | #include <mpi.h>
+      |          ^~~~~~~
+compilation terminated.
+make[2]: *** [CMakeFiles/cmTC_fd51b.dir/build.make:66: CMakeFiles/cmTC_fd51b.dir/test_mpi.cpp.o] Error 1
+make[2]: Leaving directory '/root/zxm/octopus/build/CMakeFiles/CMakeTmp'
+make[1]: *** [Makefile:121: cmTC_fd51b/fast] Error 2
+make[1]: Leaving directory '/root/zxm/octopus/build/CMakeFiles/CMakeTmp'
+
+
+

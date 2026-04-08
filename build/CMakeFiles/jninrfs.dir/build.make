@@ -305,7 +305,7 @@ libjninrfs.so: CMakeFiles/jninrfs.dir/src/net/mempool.cpp.o
 libjninrfs.so: CMakeFiles/jninrfs.dir/src/tools/debug.cpp.o
 libjninrfs.so: CMakeFiles/jninrfs.dir/build.make
 libjninrfs.so: /usr/lib/x86_64-linux-gnu/libcrypto.so
-libjninrfs.so: /root/zxm/rdma-core/build/lib/libibverbs.so
+libjninrfs.so: /usr/lib/libibverbs.so
 libjninrfs.so: /usr/lib/x86_64-linux-gnu/libfuse.so
 libjninrfs.so: CMakeFiles/jninrfs.dir/link.txt
 	@$(CMAKE_COMMAND) -E cmake_echo_color --switch=$(COLOR) --green --bold --progress-dir=/root/zxm/octopus/build/CMakeFiles --progress-num=$(CMAKE_PROGRESS_17) "Linking CXX shared library libjninrfs.so"

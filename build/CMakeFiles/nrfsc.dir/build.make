@@ -305,7 +305,7 @@ libnrfsc.so: CMakeFiles/nrfsc.dir/src/net/mempool.cpp.o
 libnrfsc.so: CMakeFiles/nrfsc.dir/src/tools/debug.cpp.o
 libnrfsc.so: CMakeFiles/nrfsc.dir/build.make
 libnrfsc.so: /usr/lib/x86_64-linux-gnu/libcrypto.so
-libnrfsc.so: /root/zxm/rdma-core/build/lib/libibverbs.so
+libnrfsc.so: /usr/lib/libibverbs.so
 libnrfsc.so: /usr/lib/x86_64-linux-gnu/libfuse.so
 libnrfsc.so: CMakeFiles/nrfsc.dir/link.txt
 	@$(CMAKE_COMMAND) -E cmake_echo_color --switch=$(COLOR) --green --bold --progress-dir=/root/zxm/octopus/build/CMakeFiles --progress-num=$(CMAKE_PROGRESS_17) "Linking CXX shared library libnrfsc.so"
