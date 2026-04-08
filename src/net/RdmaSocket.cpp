@@ -1310,7 +1310,7 @@ bool RdmaSocket::RdmaRead(uint16_t NodeID, uint64_t SourceBuffer, uint64_t DesBu
     }
 
     if (isServer && TaskID >= DATA_QP_SMALL_INDEX && TaskID <= DATA_QP_LARGE_INDEX) {
-        const long timeout_ms = 2000;
+        const long timeout_ms = 20000;
         const uint32_t expect_qpn = peer->qp[TaskID]->qp_num;
         struct ibv_wc wc[1000];
         struct timespec start_ts, now_ts;
@@ -1502,10 +1502,10 @@ bool RdmaSocket::RdmaWrite(uint16_t NodeID, uint64_t SourceBuffer, uint64_t DesB
         Debug::debugItem("Post RDMA_WRITE with remote address = %lx", wr.wr.rdma.remote_addr);
         wr.wr.rdma.rkey        = peer->rkey;
 
-        // if(chunkIdx == chunkCount - 1){
-        //     uint64_t *value = (uint64_t *)SourceBuffer;
-        //     *value = 1; 
-        // }
+        if(chunkIdx == chunkCount - 1){
+            uint64_t *value = (uint64_t *)SourceBuffer;
+            *value = 1; 
+        }
         if (ibv_post_send(peer->qp[TaskID], &wr, &wrBad)) {
             Debug::notifyError("Send with RDMA_WRITE(WITH_IMM) failed.");
             printf("%s\n", strerror(errno));

@@ -1014,7 +1014,7 @@ int nrfsRawRead(nrfs fs, nrfsFile _file, void* buffer, uint64_t size, uint64_t o
 	*value = 0;
 	sendMessage(node_id, &bufferExtentReadSend, sizeof(ExtentReadSendBuffer), 
 					&bufferExtentReadReceive, sizeof(ExtentReadReceiveBuffer));	
-	//while (*value == 0);
+	while (*value == 0);
 	memcpy((void *)buffer, (void *)(client->mm + 2 * 4096), effective_size);
 	// uint32_t *v = (uint32_t*)(mem.get_storage_addr() + size - sizeof(uint32_t));
 	// while(*v != (uint32_t)rdma.get_node_id())

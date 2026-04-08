@@ -20,7 +20,7 @@ static inline uint32_t octopus_gettid_u32() {
     return (uint32_t)getpid();
 #endif
 }
-#define USE_SRM 0
+#define USE_SRM 1
 #define CLIENT_MESSAGE_SIZE 4096
 #define MAX_CLIENT_NUMBER 64
 #define SERVER_MASSAGE_SIZE CLIENT_MESSAGE_SIZE
